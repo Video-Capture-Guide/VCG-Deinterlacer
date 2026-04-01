@@ -34,7 +34,7 @@ Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launc
 ## System Requirements
 
 - **Windows 10 or 11** (64-bit)
-- **Internet connection** on first launch (to download FFmpeg and VapourSynth, ~120 MB)
+- **Internet connection** on first launch (to download FFmpeg and VapourSynth, ~136 MB)
 
 FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next to the EXE. No system-wide installation is required.
 
@@ -45,7 +45,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 1. Download `VCG_Deinterlacer_Beta-02.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
-4. On first launch, the **First Run Setup** window appears and downloads the required tools (~120 MB). This only happens once.
+4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
 5. After setup completes, the main wizard opens automatically.
 
 On all future launches the wizard opens directly with no setup step.
@@ -106,7 +106,7 @@ If motion looks jerky or stuttery after processing, try switching the field orde
 - Check that `_deps\ffmpeg\ffmpeg.exe` and `_deps\vs\vspipe.exe` exist
 
 **"Could not load source" error**
-- Make sure `_deps\vs\plugins\LSMASHSource.dll` exists
+- Make sure `_deps\vs\plugins64\LSMASHSource.dll` exists
 - Try re-running the setup by deleting the `_deps\` folder
 
 **Processing is very slow**

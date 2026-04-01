@@ -79,7 +79,7 @@ What it does:
 - Installs/updates required Python packages
 - Locates the tkdnd drag-and-drop folder
 - Compiles `vcg_deinterlacer_beta_0_5.py` into `dist\VCG_Deinterlacer.exe`
-  using Nuitka with `--onefile` and `--onefile-tempdir-spec={TEMP}\VCGDeinterlacer`
+  using Nuitka with `--onefile`
 
 **First build takes 10–30 minutes.** Subsequent builds use Nuitka's cache
 and are much faster.
@@ -144,12 +144,14 @@ Write-Host "Created: $out.zip"
 ## Step 5 — Test the ZIP
 
 1. Extract `VCG_Deinterlacer_Beta-02.zip` to a **new folder on a clean user profile**
-   (or a machine without FFmpeg/VapourSynth)
+   (or a machine without FFmpeg/VapourSynth installed)
 2. Double-click `VCG_Deinterlacer.exe`
 3. The First Run Setup window should appear and:
-   - Download FFmpeg (~75 MB) into `_deps\ffmpeg\`
-   - Download and silently install VapourSynth R73
-   - Install plugins via vsrepo
+   - Download `vcg-deps-v6.zip` (~136 MB) from GitHub
+   - Extract it, creating a `_deps\` folder next to the EXE containing:
+     - `_deps\ffmpeg\` — ffmpeg.exe and ffprobe.exe
+     - `_deps\vs\` — portable VapourSynth runtime (vspipe.exe, Python DLLs, site-packages)
+     - `_deps\vs\plugins64\` — all VS plugins (lsmas, mvtools, znedi3, etc.)
    - Write `paths.json` next to the EXE
 4. After setup completes the main wizard opens automatically
 5. On subsequent launches the wizard opens directly (no setup window)
@@ -167,19 +169,50 @@ Upload `VCG_Deinterlacer_Beta-02.zip` to your distribution channels:
 
 ## How Beta-02 Portable Mode Works
 
-On first launch:
-1. App checks for `_deps\ffmpeg\ffmpeg.exe` and the VapourSynth `vspipe.exe`
-2. If either is missing, `FirstRunSetupWindow` opens
-3. FFmpeg zip is downloaded → `ffmpeg.exe` and `ffprobe.exe` extracted to `_deps\ffmpeg\`
-4. VapourSynth installer is downloaded and run silently (`/VERYSILENT /NORESTART`)
-5. vsrepo installs havsfunc, lsmas, mvtools, fmtconv
-6. `paths.json` is written next to the EXE
-7. Setup window closes and the main wizard opens
+The app uses a fully **self-contained portable deps bundle** (`vcg-deps-v6.zip`) hosted on
+GitHub Releases. No system-wide installation of FFmpeg or VapourSynth is required or performed.
 
-On subsequent launches:
-- `_deps\ffmpeg\ffmpeg.exe` is found → FFmpeg check passes
-- `vspipe.exe` is found in the system VapourSynth location → VS check passes
+**On first launch:**
+1. App checks for `_deps\vcg_deps.version` containing the expected version number
+2. If missing or wrong version, `FirstRunSetupWindow` opens
+3. A single ZIP (`vcg-deps-v6.zip`, ~136 MB) is downloaded from the `vcg-deinterlacer-deps` GitHub repo
+4. The ZIP is extracted — the root folder is renamed to `_deps\` next to the EXE
+5. `paths.json` is written next to the EXE pointing to `_deps\ffmpeg\ffmpeg.exe`,
+   `_deps\ffmpeg\ffprobe.exe`, and `_deps\vs\vspipe.exe`
+6. Setup window closes and the main wizard opens
+
+**`_deps\` folder layout after setup:**
+```
+_deps\
+  ffmpeg\
+    ffmpeg.exe
+    ffprobe.exe
+  vs\
+    vspipe.exe
+    python314.dll  (and other VS runtime DLLs)
+    python314.zip  (VS stdlib)
+    portable.vs    (marker file that enables portable mode)
+    site-packages\ (havsfunc, mvsfunc, vsutil, adjust, vapoursynth bindings)
+    plugins64\     (lsmas, mvtools, znedi3, fmtconv, etc. + nnedi3_weights.bin)
+  vcg_deps.version  (contains "6")
+```
+
+**On subsequent launches:**
+- `_deps\vcg_deps.version` contains `6` → deps check passes
 - `FirstRunSetupWindow` is skipped entirely
+- `paths.json` is read to locate ffmpeg/ffprobe/vspipe
+
+**VapourSynth portable mode:**
+- `portable.vs` marker file tells VapourSynth to run fully self-contained
+- All plugins are explicitly loaded in generated `.vpy` scripts via `core.std.LoadPlugin()`
+  (bypasses VapourSynth autoloading, which is unreliable in portable mode)
+- No registry entries, no system PATH changes, no files written outside `_deps\`
+
+**Updating the deps bundle:**
+- Build a new ZIP using `build_deps_package.bat`
+- Upload to `vcg-deinterlacer-deps` GitHub Releases as `vN`
+- Bump `DEPS_VERSION` and `DEPS_ZIP_URL` in `vcg_deinterlacer_beta_0_5.py`
+- Rebuild the EXE
 
 ---
 
@@ -188,8 +221,7 @@ On subsequent launches:
 | Issue | Status |
 |-------|--------|
 | Brief console window flash on launch | Known — Nuitka limitation |
-| VapourSynth installs system-wide (not portable) | By design — VS requires system registration for plugins |
-| First run requires internet connection | By design |
+| First run requires internet connection (~136 MB download) | By design |
 | No auto-update mechanism | Planned for future release |
 
 ---
@@ -210,24 +242,19 @@ On subsequent launches:
 **Segfault on launch**
 Delete the `dist\` folder completely and rebuild from scratch (stale Nuitka cache).
 
-**First Run Setup fails to download FFmpeg**
+**First Run Setup fails to download the deps ZIP**
 - Check internet connection
-- Try downloading manually: https://www.gyan.dev/ffmpeg/builds/
-- Extract `ffmpeg.exe` and `ffprobe.exe` into a `_deps\ffmpeg\` folder next to the EXE
+- Try disabling VPN or firewall temporarily
+- Download manually: https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/latest
+  - Download `vcg-deps-v6.zip` and extract it — rename the extracted folder to `_deps`
+    and place it next to `VCG_Deinterlacer.exe`
 
-**First Run Setup fails to install VapourSynth**
-- Download manually: https://github.com/vapoursynth/vapoursynth/releases
-- Run `VapourSynth64-R73.exe` and install with defaults
-- Then open a command prompt and run: `pip install vsrepo` then `vsrepo install havsfunc lsmas mvtools fmtconv`
-
-**App opens but processing fails**
+**App opens but processing fails immediately**
+- Delete the `_deps\` folder next to the EXE and re-launch to re-run setup
 - Check that `paths.json` was written next to the EXE
 - Verify FFmpeg: run `_deps\ffmpeg\ffmpeg.exe -version` from a command prompt
-- Verify VapourSynth: run `vspipe --version` from a command prompt
+- Verify VapourSynth: run `_deps\vs\vspipe.exe --version` from a command prompt
 
-**VapourSynth plugins not found**
-Run from a command prompt:
-```
-pip install vsrepo
-vsrepo install havsfunc lsmas mvtools fmtconv
-```
+**VapourSynth plugins not found / "Could not load plugin"**
+- Check that `_deps\vs\plugins64\` exists and contains `.dll` files
+- Delete `_deps\` and re-run setup to re-download a clean copy of the deps
