@@ -161,7 +161,7 @@ PATHS_FILE = os.path.join(SCRIPT_DIR, 'paths.json')
 DEPS_DIR        = os.path.join(SCRIPT_DIR, '_deps')
 FFMPEG_DEPS_DIR = os.path.join(DEPS_DIR, 'ffmpeg')
 VS_DEPS_DIR     = os.path.join(DEPS_DIR, 'vs')
-DEPS_VERSION    = '1'   # bump when you upload a new deps ZIP
+DEPS_VERSION    = '2'   # bump when you upload a new deps ZIP
 print(f"[VCG Diag] DEPS_DIR  = {DEPS_DIR}")
 print(f"[VCG Diag] deps exist= {os.path.isdir(DEPS_DIR)}")
 
@@ -169,7 +169,7 @@ print(f"[VCG Diag] deps exist= {os.path.isdir(DEPS_DIR)}")
 # replace this URL with the direct link to your asset.
 DEPS_ZIP_URL = (
     'https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps'
-    '/releases/download/v1/vcg-deps-v1.zip'
+    '/releases/download/v2/vcg-deps-v2.zip'
 )
 
 
@@ -258,7 +258,7 @@ def get_vspipe_env():
         env.pop(key, None)
 
     # ── Set VapourSynth plugin path ──
-    env['VSPluginPath'] = os.path.join(VS_DEPS_DIR, 'plugins')
+    env['VSPluginPath'] = os.path.join(VS_DEPS_DIR, 'plugins64')
 
     # ── Prepend VS_DEPS_DIR to PATH so Windows finds python3XX.dll,
     #    VapourSynth.dll, VSScript.dll there first (before any Nuitka
@@ -5906,13 +5906,13 @@ class FirstRunSetupWindow(tk.Tk):
     Downloads ONE zip from a URL we control (our own GitHub releases),
     extracts it to _deps\ next to the EXE, then hands off to the wizard.
 
-    Structure of vcg-deps-v1.zip:
-        vcg-deps-v1/
+    Structure of vcg-deps-v2.zip:
+        vcg-deps-v2/
           ffmpeg/    ffmpeg.exe  ffprobe.exe
           vs/        vspipe.exe  VapourSynth.dll  VSScript.dll
                      python3XX.dll  python3XX.zip  python3XX._pth
                      site-packages/  vapoursynth.pyd  havsfunc.py ...
-                     plugins/        lsmas.dll  libmvtools.dll  fmtconv.dll
+                     plugins64/      lsmas.dll  libmvtools.dll  fmtconv.dll
           vcg_deps.version
     """
 
@@ -6089,8 +6089,8 @@ class FirstRunSetupWindow(tk.Tk):
                     zf.extract(member, os.path.dirname(DEPS_DIR))
                     self._set_progress(50 + i * 45 // total)
 
-            # ZIP contains vcg-deps-v1\ as root folder — rename to _deps
-            extracted_root = os.path.join(os.path.dirname(DEPS_DIR), 'vcg-deps-v1')
+            # ZIP contains vcg-deps-v2\ as root folder — rename to _deps
+            extracted_root = os.path.join(os.path.dirname(DEPS_DIR), 'vcg-deps-v2')
             if os.path.isdir(extracted_root) and extracted_root != DEPS_DIR:
                 if os.path.exists(DEPS_DIR):
                     shutil.rmtree(DEPS_DIR, ignore_errors=True)
@@ -6123,7 +6123,7 @@ class FirstRunSetupWindow(tk.Tk):
         self._log_line(f"Downloading deps package from:")
         self._log_line(f"  {DEPS_ZIP_URL}")
 
-        tmp_zip = os.path.join(tempfile.gettempdir(), 'vcg-deps-v1.zip')
+        tmp_zip = os.path.join(tempfile.gettempdir(), 'vcg-deps-v2.zip')
         ok = self._download(DEPS_ZIP_URL, tmp_zip)
 
         if not ok:
@@ -6132,7 +6132,7 @@ class FirstRunSetupWindow(tk.Tk):
             self._log_line("  Please check your internet connection.")
             self._log_line("  You can also download the file manually:")
             self._log_line(f"  {DEPS_ZIP_URL}")
-            self._log_line(f"  and place vcg-deps-v1.zip next to the EXE,")
+            self._log_line(f"  and place vcg-deps-v2.zip next to the EXE,")
             self._log_line(f"  then re-launch VCG Deinterlacer.")
             self._set_status("Download failed — see log for details.")
             self.after(0, lambda: self._show_manual_instructions())
@@ -6165,7 +6165,7 @@ class FirstRunSetupWindow(tk.Tk):
             "To install manually:\n\n"
             "1. Download this file in your browser:\n"
             f"   {DEPS_ZIP_URL}\n\n"
-            "2. Extract it — you should get a  vcg-deps-v1  folder.\n\n"
+            "2. Extract it — you should get a  vcg-deps-v2  folder.\n\n"
             "3. Rename that folder to  _deps\n"
             "   and place it next to VCG_Deinterlacer.exe\n\n"
             "4. Re-launch VCG Deinterlacer."
