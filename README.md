@@ -31,6 +31,33 @@ Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launc
 
 ---
 
+## Screenshots
+
+<table>
+<tr>
+<td align="center"><img src="docs/screenshots/VCGD-001.jpg" width="380"><br><sub>Welcome screen</sub></td>
+<td align="center"><img src="docs/screenshots/VCGD-002.jpg" width="380"><br><sub>Step 1 — Select video files</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/VCGD-003.jpg" width="380"><br><sub>Step 1 — File loaded and ready</sub></td>
+<td align="center"><img src="docs/screenshots/VCGD-004.jpg" width="380"><br><sub>Step 2 — Source details (auto-detected)</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/VCGD-005.jpg" width="380"><br><sub>Step 2 — Quick-process option</sub></td>
+<td align="center"><img src="docs/screenshots/VCGD-006.jpg" width="380"><br><sub>Step 3 — Noise removal analysis</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/VCGD-007.jpg" width="380"><br><sub>Step 3 — Color analysis</sub></td>
+<td align="center"><img src="docs/screenshots/VCGD-008.jpg" width="380"><br><sub>Step 3 — Video levels</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/VCGD-009.jpg" width="380"><br><sub>Step 4 — Choose output format</sub></td>
+<td align="center"><img src="docs/screenshots/VCGD-010.jpg" width="380"><br><sub>Step 4 — Processing complete</sub></td>
+</tr>
+</table>
+
+---
+
 ## System Requirements
 
 - **Windows 10 or 11** (64-bit)

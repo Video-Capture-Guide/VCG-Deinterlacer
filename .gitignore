@@ -13,8 +13,11 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Large dependency package (uploaded to GitHub Releases separately)
-vcg-deps-v1.zip
+# Large dependency packages (uploaded to GitHub Releases separately)
+vcg-deps-v*.zip
+
+# Original screenshots folder (canonical copies live in docs/screenshots/)
+Software Screens/
 
 # Temporary build folder created by build_deps_package.bat
 deps_build/
