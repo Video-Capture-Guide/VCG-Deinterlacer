@@ -26,7 +26,7 @@ echo.
 REM ── Working directories ───────────────────────────────────────
 set SCRIPT_DIR=%~dp0
 set BUILD_DIR=%SCRIPT_DIR%deps_build
-set OUT_DIR=%BUILD_DIR%\vcg-deps-v3
+set OUT_DIR=%BUILD_DIR%\vcg-deps-v4
 set VS_OUT=%OUT_DIR%\vs
 set FF_OUT=%OUT_DIR%\ffmpeg
 
@@ -215,45 +215,60 @@ echo [5/7] Copying Python packages (havsfunc, mvsfunc)...
 set PY_SITE_DEST=%VS_OUT%\site-packages
 
 REM ── Collect havsfunc / mvsfunc / adjust from all known locations ──────────
-REM vsrepo installs scripts to site-packages OR %APPDATA%\VapourSynth
-REM Check multiple locations in priority order.
+REM vsrepo installs scripts to %APPDATA%\Python\PythonXXX\site-packages OR
+REM %APPDATA%\VapourSynth.  Check all locations in priority order.
 
-for %%F in (havsfunc.py mvsfunc.py adjust.py) do (
-    REM 1. Python site-packages (standard pip / vsrepo install)
+REM Build the per-user Python site-packages path (%APPDATA%\Python\PythonXXX\site-packages)
+set PY_APPDATA_SITE=%APPDATA%\Python\Python%PYTHON_VER%\site-packages
+
+for %%F in (havsfunc.py adjust.py) do (
+    REM 1. Per-user Python AppData site-packages (where vsrepo installs on Python 3.14+)
+    if exist "%PY_APPDATA_SITE%\%%F"              copy "%PY_APPDATA_SITE%\%%F"              "%PY_SITE_DEST%\" 2>nul
+    REM 2. Python site-packages (standard install)
     if exist "%PY_SITE%\%%F"                      copy "%PY_SITE%\%%F"                      "%PY_SITE_DEST%\" 2>nul
-    REM 2. %APPDATA%\VapourSynth  (vsrepo per-user install)
+    REM 3. %APPDATA%\VapourSynth  (vsrepo legacy per-user install)
     if exist "%APPDATA%\VapourSynth\%%F"          copy "%APPDATA%\VapourSynth\%%F"          "%PY_SITE_DEST%\" 2>nul
-    REM 3. VS install dir root
+    REM 4. VS install dir root / core
     if exist "%VS_DIR%\%%F"                        copy "%VS_DIR%\%%F"                        "%PY_SITE_DEST%\" 2>nul
-    REM 4. VS core folder
     if exist "%VS_DIR%\core\%%F"                   copy "%VS_DIR%\core\%%F"                   "%PY_SITE_DEST%\" 2>nul
 )
 
-REM ── If havsfunc still missing, download it directly from GitHub ───────────
-REM NOTE: Pin to r33 tag — the last standalone version before r34 added
-REM       vsexprtools dependency.  havsfunc.py is at root in r33.
+REM ── mvsfunc: copy as package directory if present, else flat .py ─────────
+set FOUND_MVS=0
+if exist "%PY_APPDATA_SITE%\mvsfunc\__init__.py" (
+    xcopy /E /I /Y /Q "%PY_APPDATA_SITE%\mvsfunc" "%PY_SITE_DEST%\mvsfunc\" >nul
+    echo   Copied mvsfunc\ package from AppData
+    set FOUND_MVS=1
+)
+if "%FOUND_MVS%"=="0" if exist "%PY_SITE%\mvsfunc\__init__.py" (
+    xcopy /E /I /Y /Q "%PY_SITE%\mvsfunc" "%PY_SITE_DEST%\mvsfunc\" >nul
+    echo   Copied mvsfunc\ package from site-packages
+    set FOUND_MVS=1
+)
+if "%FOUND_MVS%"=="0" if exist "%PY_APPDATA_SITE%\mvsfunc.py" (
+    copy "%PY_APPDATA_SITE%\mvsfunc.py" "%PY_SITE_DEST%\" 2>nul
+    set FOUND_MVS=1
+)
+if "%FOUND_MVS%"=="0" if exist "%PY_SITE%\mvsfunc.py" (
+    copy "%PY_SITE%\mvsfunc.py" "%PY_SITE_DEST%\" 2>nul
+    set FOUND_MVS=1
+)
+if "%FOUND_MVS%"=="0" if exist "%APPDATA%\VapourSynth\mvsfunc.py" (
+    copy "%APPDATA%\VapourSynth\mvsfunc.py" "%PY_SITE_DEST%\" 2>nul
+    set FOUND_MVS=1
+)
+
+REM ── If havsfunc still missing, download from GitHub (latest main) ─────────
 if not exist "%PY_SITE_DEST%\havsfunc.py" (
-    echo   havsfunc.py not found locally — downloading r33 from GitHub...
-    set HAV_URL=https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/r33/havsfunc.py
+    echo   havsfunc.py not found locally — downloading from GitHub...
+    set HAV_URL=https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/havsfunc/master/havsfunc.py
     powershell -NoProfile -NonInteractive -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '!HAV_URL!' -OutFile '%PY_SITE_DEST%\havsfunc.py' -UseBasicParsing" 2>nul
     if not exist "%PY_SITE_DEST%\havsfunc.py" (
         curl.exe -L -o "%PY_SITE_DEST%\havsfunc.py" "!HAV_URL!" --silent --show-error 2>nul
     )
 )
 
-REM ── If mvsfunc still missing, download it too ─────────────────────────────
-REM NOTE: Pin to r9 tag — standalone version at root, no package deps.
-if not exist "%PY_SITE_DEST%\mvsfunc.py" (
-    echo   mvsfunc.py not found locally — downloading r9 from GitHub...
-    set MVS_URL=https://raw.githubusercontent.com/HomeOfVapourSynthEvolution/mvsfunc/r9/mvsfunc.py
-    powershell -NoProfile -NonInteractive -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '!MVS_URL!' -OutFile '%PY_SITE_DEST%\mvsfunc.py' -UseBasicParsing" 2>nul
-    if not exist "%PY_SITE_DEST%\mvsfunc.py" (
-        curl.exe -L -o "%PY_SITE_DEST%\mvsfunc.py" "!MVS_URL!" --silent --show-error 2>nul
-    )
-)
-
 REM ── If adjust still missing, download it ────────────────────────────────
-REM    Required by havsfunc r33 (import adjust).
 if not exist "%PY_SITE_DEST%\adjust.py" (
     echo   adjust.py not found locally — downloading from GitHub...
     set ADJ_URL=https://raw.githubusercontent.com/dubhater/vapoursynth-adjust/master/adjust.py
@@ -267,26 +282,33 @@ REM ── Verify havsfunc (required) — must be real Python, not a 404 page �
 set HAV_OK=0
 if exist "%PY_SITE_DEST%\havsfunc.py" (
     for %%A in ("%PY_SITE_DEST%\havsfunc.py") do (
-        if %%~zA GTR 1000 set HAV_OK=1
+        if %%~zA GTR 10000 set HAV_OK=1
     )
 )
 if "%HAV_OK%"=="1" (
     echo   Copied havsfunc.py OK
 ) else (
     if exist "%PY_SITE_DEST%\havsfunc.py" del "%PY_SITE_DEST%\havsfunc.py"
-    echo   ERROR: havsfunc.py could not be found or downloaded ^(got 404?^).
+    echo   ERROR: havsfunc.py could not be found ^(got 404 or too small^).
     echo   Please run:  vsrepo install havsfunc
     echo   Then re-run this script.
     pause
     exit /b 1
 )
-REM ── Same check for mvsfunc ──
+REM ── Check mvsfunc was found ──
+if "%FOUND_MVS%"=="1" (
+    echo   Copied mvsfunc OK
+) else (
+    echo   WARNING: mvsfunc not found locally. havsfunc may fail at runtime.
+    REM Non-fatal — continue
+)
+REM ── Remove any stale placeholder below size threshold ────────────────────
 if exist "%PY_SITE_DEST%\mvsfunc.py" (
     for %%A in ("%PY_SITE_DEST%\mvsfunc.py") do (
         if %%~zA GTR 1000 (
-            echo   Copied mvsfunc.py OK
+            echo   mvsfunc.py size OK
         ) else (
-            echo   WARNING: mvsfunc.py looks too small — possibly a 404 page.
+            echo   WARNING: mvsfunc.py looks too small — removing stale placeholder.
             del "%PY_SITE_DEST%\mvsfunc.py"
         )
     )
@@ -420,7 +442,7 @@ echo   FFmpeg ready.
 
 REM ── Write version marker ──────────────────────────────────────
 REM NOTE: must use (echo 1) — plain "echo 1>" is parsed as stdout redirect, not text
-(echo 3) > "%OUT_DIR%\vcg_deps.version"
+(echo 4) > "%OUT_DIR%\vcg_deps.version"
 
 REM ── Portable marker for VapourSynth ─────────────────────────────
 REM VSScript.dll checks for this file to enable portable mode.
@@ -433,7 +455,7 @@ REM ── Create ZIP ───────────────────�
 echo.
 echo Creating vcg-deps-v1.zip...
 
-set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v3.zip
+set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v4.zip
 if exist "%OUT_ZIP%" del "%OUT_ZIP%"
 
 powershell -NoProfile -NonInteractive -Command ^
@@ -448,7 +470,7 @@ if not exist "%OUT_ZIP%" (
 for %%F in ("%OUT_ZIP%") do (
     set /a ZIP_MB=%%~zF / 1048576
 )
-echo Done! Created: vcg-deps-v3.zip  (!ZIP_MB! MB)
+echo Done! Created: vcg-deps-v4.zip  (!ZIP_MB! MB)
 
 REM ── Cleanup ───────────────────────────────────────────────────
 rmdir /s /q "%BUILD_DIR%"
@@ -458,14 +480,14 @@ echo ============================================================
 echo  NEXT STEPS:
 echo ============================================================
 echo.
-echo  1. Upload vcg-deps-v3.zip to GitHub as a release asset:
+echo  1. Upload vcg-deps-v4.zip to GitHub as a release asset:
 echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
-echo       Tag: v3
-echo       Asset filename: vcg-deps-v3.zip
+echo       Tag: v4
+echo       Asset filename: vcg-deps-v4.zip
 echo.
 echo  2. Copy the direct download URL and update DEPS_ZIP_URL
 echo     in vcg_deinterlacer_beta_0_5.py:
-echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/download/v3/vcg-deps-v3.zip
+echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/download/v4/vcg-deps-v4.zip
 echo.
 echo  3. Rebuild the app EXE with build_vcg_deinterlacer.bat
 echo.
