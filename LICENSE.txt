@@ -1,0 +1,71 @@
+MIT License
+
+Copyright (c) 2026 VideoCaptureGuide
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+============================================================
+THIRD-PARTY COMPONENTS
+============================================================
+
+VCG Deinterlacer relies on the following third-party components,
+each subject to their own license terms:
+
+FFmpeg
+  License:  GNU Lesser General Public License v2.1 or later (LGPL)
+            and GNU General Public License v2 or later (GPL) for some components
+  Website:  https://ffmpeg.org
+  Source:   https://ffmpeg.org/download.html
+
+VapourSynth
+  License:  GNU Lesser General Public License v2.1 or later (LGPL)
+  Website:  https://www.vapoursynth.com
+  Source:   https://github.com/vapoursynth/vapoursynth
+
+QTGMC (via havsfunc)
+  License:  MIT License
+  Author:   Originally by Vit (tritical), maintained by the VapourSynth community
+  Source:   https://github.com/HomeOfVapourSynthEvolution/havsfunc
+
+SMDegrain (via havsfunc)
+  License:  MIT License
+  Source:   https://github.com/HomeOfVapourSynthEvolution/havsfunc
+
+Python
+  License:  Python Software Foundation License Version 2
+  Website:  https://www.python.org
+
+Pillow (PIL Fork)
+  License:  MIT-CMU License
+  Website:  https://python-pillow.org
+
+tkinterdnd2
+  License:  MIT License
+  Source:   https://github.com/pmgagne/tkinterdnd2
+
+============================================================
+DISCLAIMER
+============================================================
+
+This software is provided for free and is offered "as is" without any
+warranty. The author makes no guarantees about the software's functionality,
+reliability, or suitability for any particular purpose. Use at your own risk.
+
+Users are responsible for ensuring compliance with all applicable licenses
+for third-party components (FFmpeg, VapourSynth, and associated plugins).

@@ -1,0 +1,34 @@
+# ============================================================
+# VCG Deinterlacer - Git Ignore
+# ============================================================
+
+# Build output and compiled EXE
+dist/
+
+# Nuitka build caches
+*.build/
+*.dist/
+*.onefile-build/
+__pycache__/
+*.pyc
+*.pyo
+
+# Large dependency package (uploaded to GitHub Releases separately)
+vcg-deps-v1.zip
+
+# Temporary build folder created by build_deps_package.bat
+deps_build/
+
+# Sample video files (large binary files)
+Sample Videos/
+
+# Runtime-generated files
+paths.json
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini

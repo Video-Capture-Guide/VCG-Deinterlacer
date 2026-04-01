@@ -1,13 +1,22 @@
 # VCG Deinterlacer
-### Beta-01 — by [VideoCaptureGuide](https://www.youtube.com/@VideoCaptureGuide)
+### Beta-02 — by [VideoCaptureGuide](https://www.youtube.com/@VideoCaptureGuide)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
+
+---
+
+## Download
+
+**[Download VCG_Deinterlacer.exe — Beta-02](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
+
+Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
 
 ---
 
 ## Features
 
 - **QTGMC deinterlacing** — the gold standard for analog video restoration
+- **Automatic first-run setup** — downloads FFmpeg and VapourSynth automatically on first launch
 - **Automatic video analysis** — detects noise level, color cast, color bleeding, and levels
 - **Guided wizard** — walks you through every setting with explanations
 - **Batch processing** — queue multiple files and process them overnight
@@ -18,57 +27,34 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 - **Dropout removal** — reduces tape damage artifacts
 - **Comparison video** — generates a side-by-side original vs. enhanced clip
 - **Drag and drop** — drop video files directly onto the app window
+- **Portable** — no installer, no UAC prompt, no admin rights required
 
 ---
 
-## Requirements
+## System Requirements
 
-### Required
 - **Windows 10 or 11** (64-bit)
-- **FFmpeg** — for video encoding
-- **VapourSynth** — for QTGMC processing
+- **Internet connection** on first launch (to download FFmpeg and VapourSynth, ~120 MB)
 
-### VapourSynth Plugins (installed via vsrepo)
-- `havsfunc` — QTGMC deinterlacing and SMDegrain denoising
-- `lsmas` — video source (LWLibavSource)
-- `mvtools` — motion vectors for QTGMC
-- `fmtconv` — format conversion
+FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next to the EXE. No system-wide installation is required.
 
 ---
 
 ## Installation
 
-### Step 1 — Install FFmpeg
+1. Download `VCG_Deinterlacer_Beta-02.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
+3. Double-click `VCG_Deinterlacer.exe`
+4. On first launch, the **First Run Setup** window appears and downloads the required tools (~120 MB). This only happens once.
+5. After setup completes, the main wizard opens automatically.
 
-1. Download **ffmpeg-release-essentials.zip** from https://www.gyan.dev/ffmpeg/builds/
-2. Extract to `C:\ffmpeg` so that `C:\ffmpeg\bin\ffmpeg.exe` exists
-3. Verify by opening a command prompt and typing: `ffmpeg -version`
-
-### Step 2 — Install VapourSynth
-
-1. Download the latest installer from https://github.com/vapoursynth/vapoursynth/releases
-2. Run the installer with default options
-3. Verify by opening a command prompt and typing: `vspipe --version`
-
-### Step 3 — Install VapourSynth Plugins
-
-Open a command prompt and run:
-
-```
-vsrepo.py install havsfunc lsmas mvtools fmtconv
-```
-
-If `vsrepo.py` is not in your PATH, find it in your VapourSynth installation folder.
-
-### Step 4 — Install VCG Deinterlacer
-
-Run `VCG_Deinterlacer_Beta-01_Setup.exe` and follow the installer prompts.
+On all future launches the wizard opens directly with no setup step.
 
 ---
 
 ## Usage
 
-1. Launch **VCG Deinterlacer** from the Start Menu or Desktop shortcut
+1. Launch **VCG Deinterlacer** from the folder where you extracted it
 2. Click **START** on the welcome screen
 3. **Select File** — drag and drop or browse for your video file(s)
 4. **Source** — confirm format (NTSC/PAL), field order (TFF/BFF), and crop settings
@@ -110,14 +96,18 @@ If motion looks jerky or stuttery after processing, try switching the field orde
 
 ## Troubleshooting
 
+**First Run Setup fails to download**
+- Check your internet connection
+- Try disabling your VPN or firewall temporarily
+- You can download the tools manually — see the instructions shown in the setup window
+
 **The app opens but processing fails immediately**
-- Verify FFmpeg is installed at `C:\ffmpeg\bin\ffmpeg.exe`
-- Verify VapourSynth is installed and `vspipe` is in your PATH
-- Verify all four VapourSynth plugins are installed (havsfunc, lsmas, mvtools, fmtconv)
+- Delete the `_deps\` folder next to the EXE and re-launch to re-run the setup
+- Check that `_deps\ffmpeg\ffmpeg.exe` and `_deps\vs\vspipe.exe` exist
 
 **"Could not load source" error**
-- Make sure lsmas is installed: `vsrepo.py install lsmas`
-- Try a different source file to rule out a corrupt input
+- Make sure `_deps\vs\plugins\LSMASHSource.dll` exists
+- Try re-running the setup by deleting the `_deps\` folder
 
 **Processing is very slow**
 - QTGMC is CPU-intensive — this is normal
@@ -149,11 +139,36 @@ Full QTGMC parameter details are available in the app under **Help → About VCG
 
 ---
 
+## Building from Source
+
+See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for full build instructions.
+
+**Quick start:**
+```
+pip install -r requirements.txt
+build_vcg_deinterlacer.bat
+```
+
+Requires Python 3.10+, Visual Studio Build Tools (or MinGW64).
+
+---
+
 ## License
 
 MIT License — see `LICENSE.txt` for full terms.
 
 This software is free and open source. Third-party components (FFmpeg, VapourSynth, havsfunc) are subject to their own licenses.
+
+---
+
+## Version History
+
+| Version | Date | Notes |
+|---------|------|-------|
+| Beta-02 | 2026-03-28 | Portable ZIP; first-run auto-setup; no installer |
+| Beta-01 | 2026-03-23 | Inno Setup installer; manual FFmpeg/VapourSynth install |
+| Beta 0.4 | 2026-03-17 | First working installer build |
+| Beta 0.2 | 2026-03-09 | Initial release |
 
 ---
 

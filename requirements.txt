@@ -1,0 +1,21 @@
+# ============================================================
+# VCG Deinterlacer - Python Dependencies
+# ============================================================
+#
+# Install with:   pip install -r requirements.txt
+#
+# NOTE: VapourSynth and FFmpeg are NOT Python packages and
+# must be installed separately before running VCG Deinterlacer.
+# See README.md for full setup instructions.
+# ============================================================
+
+# Image processing (welcome page logo, artifact illustrations, waveform/vectorscope display)
+Pillow>=10.0.0
+
+# Drag-and-drop file support
+tkinterdnd2>=0.3.0
+
+# Build tool (only needed when compiling to EXE)
+nuitka>=2.0
+ordered-set>=4.1.0
+zstandard>=0.22.0
