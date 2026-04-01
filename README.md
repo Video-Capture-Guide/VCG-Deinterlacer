@@ -1,5 +1,5 @@
 # VCG Deinterlacer
-### Beta-02 — by [VideoCaptureGuide](https://www.youtube.com/@VideoCaptureGuide)
+### Beta-02 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
 
