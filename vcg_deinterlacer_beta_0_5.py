@@ -257,13 +257,17 @@ def get_vspipe_env():
                 'PYTHONSTARTUP', 'PYTHONPLATLIBDIR'):
         env.pop(key, None)
 
-    # ── Set VapourSynth plugin path ──
+    # ── Set VapourSynth plugin path (hint — may be ignored by VS R73 portable) ──
     env['VSPluginPath'] = os.path.join(VS_DEPS_DIR, 'plugins64')
 
-    # ── Prepend VS_DEPS_DIR to PATH so Windows finds python3XX.dll,
-    #    VapourSynth.dll, VSScript.dll there first (before any Nuitka
-    #    temp dir or system-installed copies). ──
-    env['PATH'] = VS_DEPS_DIR + os.pathsep + env.get('PATH', '')
+    # ── Prepend VS_DEPS_DIR and plugins64 to PATH.
+    #    VS_DEPS_DIR  → Windows finds python3XX.dll, VapourSynth.dll, VSScript.dll
+    #    plugins64    → Windows finds libfftw3-3.dll and other plugin sub-deps
+    #                   when core.std.LoadPlugin() loads DFTTest, fft3dfilter, etc.
+    plugins64_dir = os.path.join(VS_DEPS_DIR, 'plugins64')
+    env['PATH'] = (VS_DEPS_DIR + os.pathsep
+                   + plugins64_dir + os.pathsep
+                   + env.get('PATH', ''))
 
     return env
 
@@ -1047,6 +1051,28 @@ def generate_vpy_script(config):
     lines.append('')
     lines.append('import vapoursynth as vs')
     lines.append('from vapoursynth import core')
+    lines.append('')
+
+    # ── Explicit plugin loading (portable mode) ──────────────────────────────
+    # VapourSynth R73 portable autoloading is unreliable — the plugins64 dir
+    # is sometimes not found via the portable.vs mechanism.  Load every DLL
+    # explicitly so we never depend on autoloading.  Failures are silently
+    # ignored (already-loaded plugins, non-VS DLLs like libfftw3-3.dll, etc.).
+    plugins64_dir = os.path.join(VS_DEPS_DIR, 'plugins64')
+    if os.path.isdir(plugins64_dir):
+        # Use forward slashes — safe on Windows, avoids escape issues in vpy
+        p64 = plugins64_dir.replace('\\', '/')
+        lines.append('# Explicitly load all plugins from portable _deps (bypass autoloading)')
+        lines.append('import os as _vcg_os')
+        lines.append(f'_vcg_p = "{p64}"')
+        lines.append('for _vcg_dll in sorted(_vcg_os.listdir(_vcg_p)):')
+        lines.append('    if _vcg_dll.lower().endswith(".dll"):')
+        lines.append('        try:')
+        lines.append('            core.std.LoadPlugin(_vcg_os.path.join(_vcg_p, _vcg_dll))')
+        lines.append('        except Exception:')
+        lines.append('            pass')
+        lines.append('')
+
     lines.append('import havsfunc as haf')
     lines.append('')
     
