@@ -26,7 +26,7 @@ echo.
 REM ── Working directories ───────────────────────────────────────
 set SCRIPT_DIR=%~dp0
 set BUILD_DIR=%SCRIPT_DIR%deps_build
-set OUT_DIR=%BUILD_DIR%\vcg-deps-v4
+set OUT_DIR=%BUILD_DIR%\vcg-deps-v5
 set VS_OUT=%OUT_DIR%\vs
 set FF_OUT=%OUT_DIR%\ffmpeg
 
@@ -278,6 +278,26 @@ if not exist "%PY_SITE_DEST%\adjust.py" (
     )
 )
 
+REM ── vsutil: required by havsfunc at module load time ────────────────────
+REM vsutil is installed to system site-packages by pip install vsutil
+set FOUND_VSUTIL=0
+if exist "%APPDATA%\Python\Python%PYTHON_VER%\site-packages\vsutil\__init__.py" (
+    xcopy /E /I /Y /Q "%APPDATA%\Python\Python%PYTHON_VER%\site-packages\vsutil" "%PY_SITE_DEST%\vsutil\" >nul
+    echo   Copied vsutil\ from AppData Python site-packages
+    set FOUND_VSUTIL=1
+)
+if "%FOUND_VSUTIL%"=="0" if exist "%PY_SITE%\vsutil\__init__.py" (
+    xcopy /E /I /Y /Q "%PY_SITE%\vsutil" "%PY_SITE_DEST%\vsutil\" >nul
+    echo   Copied vsutil\ from system site-packages
+    set FOUND_VSUTIL=1
+)
+if "%FOUND_VSUTIL%"=="0" (
+    echo   WARNING: vsutil not found.  Install with:  pip install vsutil
+    echo   Then re-run this script.
+    pause
+    exit /b 1
+)
+
 REM ── Verify havsfunc (required) — must be real Python, not a 404 page ─────
 set HAV_OK=0
 if exist "%PY_SITE_DEST%\havsfunc.py" (
@@ -442,7 +462,7 @@ echo   FFmpeg ready.
 
 REM ── Write version marker ──────────────────────────────────────
 REM NOTE: must use (echo 1) — plain "echo 1>" is parsed as stdout redirect, not text
-(echo 4) > "%OUT_DIR%\vcg_deps.version"
+(echo 5) > "%OUT_DIR%\vcg_deps.version"
 
 REM ── Portable marker for VapourSynth ─────────────────────────────
 REM VSScript.dll checks for this file to enable portable mode.
@@ -453,9 +473,9 @@ echo   portable.vs marker created.
 
 REM ── Create ZIP ────────────────────────────────────────────────
 echo.
-echo Creating vcg-deps-v1.zip...
+echo Creating vcg-deps-v5.zip...
 
-set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v4.zip
+set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v5.zip
 if exist "%OUT_ZIP%" del "%OUT_ZIP%"
 
 powershell -NoProfile -NonInteractive -Command ^
@@ -470,7 +490,7 @@ if not exist "%OUT_ZIP%" (
 for %%F in ("%OUT_ZIP%") do (
     set /a ZIP_MB=%%~zF / 1048576
 )
-echo Done! Created: vcg-deps-v4.zip  (!ZIP_MB! MB)
+echo Done! Created: vcg-deps-v5.zip  (!ZIP_MB! MB)
 
 REM ── Cleanup ───────────────────────────────────────────────────
 rmdir /s /q "%BUILD_DIR%"
@@ -480,14 +500,14 @@ echo ============================================================
 echo  NEXT STEPS:
 echo ============================================================
 echo.
-echo  1. Upload vcg-deps-v4.zip to GitHub as a release asset:
+echo  1. Upload vcg-deps-v5.zip to GitHub as a release asset:
 echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
-echo       Tag: v4
-echo       Asset filename: vcg-deps-v4.zip
+echo       Tag: v5
+echo       Asset filename: vcg-deps-v5.zip
 echo.
 echo  2. Copy the direct download URL and update DEPS_ZIP_URL
 echo     in vcg_deinterlacer_beta_0_5.py:
-echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/download/v4/vcg-deps-v4.zip
+echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/download/v5/vcg-deps-v5.zip
 echo.
 echo  3. Rebuild the app EXE with build_vcg_deinterlacer.bat
 echo.

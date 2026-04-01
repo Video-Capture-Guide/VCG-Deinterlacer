@@ -161,7 +161,7 @@ PATHS_FILE = os.path.join(SCRIPT_DIR, 'paths.json')
 DEPS_DIR        = os.path.join(SCRIPT_DIR, '_deps')
 FFMPEG_DEPS_DIR = os.path.join(DEPS_DIR, 'ffmpeg')
 VS_DEPS_DIR     = os.path.join(DEPS_DIR, 'vs')
-DEPS_VERSION    = '4'   # bump when you upload a new deps ZIP
+DEPS_VERSION    = '5'   # bump when you upload a new deps ZIP
 print(f"[VCG Diag] DEPS_DIR  = {DEPS_DIR}")
 print(f"[VCG Diag] deps exist= {os.path.isdir(DEPS_DIR)}")
 
@@ -169,7 +169,7 @@ print(f"[VCG Diag] deps exist= {os.path.isdir(DEPS_DIR)}")
 # replace this URL with the direct link to your asset.
 DEPS_ZIP_URL = (
     'https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps'
-    '/releases/download/v4/vcg-deps-v4.zip'
+    '/releases/download/v5/vcg-deps-v5.zip'
 )
 
 
@@ -5906,8 +5906,8 @@ class FirstRunSetupWindow(tk.Tk):
     Downloads ONE zip from a URL we control (our own GitHub releases),
     extracts it to _deps\ next to the EXE, then hands off to the wizard.
 
-    Structure of vcg-deps-v4.zip:
-        vcg-deps-v4/
+    Structure of vcg-deps-v5.zip:
+        vcg-deps-v5/
           ffmpeg/    ffmpeg.exe  ffprobe.exe
           vs/        vspipe.exe  VapourSynth.dll  VSScript.dll  portable.vs
                      python3XX.dll  python3XX.zip  python3XX._pth
@@ -6074,7 +6074,7 @@ class FirstRunSetupWindow(tk.Tk):
     # ── Extract ZIP ──────────────────────────────────────────────
 
     def _extract(self, zip_path):
-        """Extract vcg-deps-v1.zip to DEPS_DIR."""
+        """Extract vcg-deps-v5.zip to DEPS_DIR."""
         self._set_status("Extracting…")
         extract_target = os.path.dirname(DEPS_DIR)
         self._log_line("Extracting deps package…")
@@ -6090,8 +6090,8 @@ class FirstRunSetupWindow(tk.Tk):
                     zf.extract(member, os.path.dirname(DEPS_DIR))
                     self._set_progress(50 + i * 45 // total)
 
-            # ZIP contains vcg-deps-v4\ as root folder — rename to _deps
-            extracted_root = os.path.join(os.path.dirname(DEPS_DIR), 'vcg-deps-v4')
+            # ZIP contains vcg-deps-v5\ as root folder — rename to _deps
+            extracted_root = os.path.join(os.path.dirname(DEPS_DIR), 'vcg-deps-v5')
             if os.path.isdir(extracted_root) and extracted_root != DEPS_DIR:
                 if os.path.exists(DEPS_DIR):
                     shutil.rmtree(DEPS_DIR, ignore_errors=True)
@@ -6124,7 +6124,7 @@ class FirstRunSetupWindow(tk.Tk):
         self._log_line(f"Downloading deps package from:")
         self._log_line(f"  {DEPS_ZIP_URL}")
 
-        tmp_zip = os.path.join(tempfile.gettempdir(), 'vcg-deps-v4.zip')
+        tmp_zip = os.path.join(tempfile.gettempdir(), 'vcg-deps-v5.zip')
         ok = self._download(DEPS_ZIP_URL, tmp_zip)
 
         if not ok:
@@ -6133,7 +6133,7 @@ class FirstRunSetupWindow(tk.Tk):
             self._log_line("  Please check your internet connection.")
             self._log_line("  You can also download the file manually:")
             self._log_line(f"  {DEPS_ZIP_URL}")
-            self._log_line(f"  and place vcg-deps-v4.zip next to the EXE,")
+            self._log_line(f"  and place vcg-deps-v5.zip next to the EXE,")
             self._log_line(f"  then re-launch VCG Deinterlacer.")
             self._set_status("Download failed — see log for details.")
             self.after(0, lambda: self._show_manual_instructions())
@@ -6166,7 +6166,7 @@ class FirstRunSetupWindow(tk.Tk):
             "To install manually:\n\n"
             "1. Download this file in your browser:\n"
             f"   {DEPS_ZIP_URL}\n\n"
-            "2. Extract it — you should get a  vcg-deps-v4  folder.\n\n"
+            "2. Extract it — you should get a  vcg-deps-v5  folder.\n\n"
             "3. Rename that folder to  _deps\n"
             "   and place it next to VCG_Deinterlacer.exe\n\n"
             "4. Re-launch VCG Deinterlacer."
