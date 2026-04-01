@@ -26,7 +26,7 @@ echo.
 REM ── Working directories ───────────────────────────────────────
 set SCRIPT_DIR=%~dp0
 set BUILD_DIR=%SCRIPT_DIR%deps_build
-set OUT_DIR=%BUILD_DIR%\vcg-deps-v5
+set OUT_DIR=%BUILD_DIR%\vcg-deps-v6
 set VS_OUT=%OUT_DIR%\vs
 set FF_OUT=%OUT_DIR%\ffmpeg
 
@@ -408,6 +408,23 @@ REM Also copy any other plugins found (user may have extras)
 if exist "%PLUGIN_SRC1%" for %%F in ("%PLUGIN_SRC1%\*.dll") do copy "%%F" "%PLUGIN_DEST%\" 2>nul
 if exist "%PLUGIN_SRC2%" for %%F in ("%PLUGIN_SRC2%\*.dll") do copy "%%F" "%PLUGIN_DEST%\" 2>nul
 
+REM ── nnedi3_weights.bin (required by znedi3/NNEDI3 for QTGMC interpolation) ──
+REM This binary weights file MUST be present next to vsznedi3.dll / libnnedi3.dll.
+REM Without it, QTGMC fails with "znedi3: error reading weights".
+set FOUND_WEIGHTS=0
+for %%S in ("%PLUGIN_SRC1%" "%PLUGIN_SRC2%" "%PLUGIN_SRC3%") do (
+    if !FOUND_WEIGHTS!==0 if exist "%%~S\nnedi3_weights.bin" (
+        copy "%%~S\nnedi3_weights.bin" "%PLUGIN_DEST%\"
+        echo   Copied nnedi3_weights.bin
+        set FOUND_WEIGHTS=1
+    )
+)
+if !FOUND_WEIGHTS!==0 (
+    echo   WARNING: nnedi3_weights.bin not found. QTGMC will fail at runtime.
+    echo   Install with:  vsrepo install nnedi3
+    set PLUGIN_MISSING=1
+)
+
 if "%PLUGIN_MISSING%"=="1" (
     echo.
     echo   Some plugins were not found. Make sure these are installed:
@@ -462,7 +479,7 @@ echo   FFmpeg ready.
 
 REM ── Write version marker ──────────────────────────────────────
 REM NOTE: must use (echo 1) — plain "echo 1>" is parsed as stdout redirect, not text
-(echo 5) > "%OUT_DIR%\vcg_deps.version"
+(echo 6) > "%OUT_DIR%\vcg_deps.version"
 
 REM ── Portable marker for VapourSynth ─────────────────────────────
 REM VSScript.dll checks for this file to enable portable mode.
@@ -473,9 +490,9 @@ echo   portable.vs marker created.
 
 REM ── Create ZIP ────────────────────────────────────────────────
 echo.
-echo Creating vcg-deps-v5.zip...
+echo Creating vcg-deps-v6.zip...
 
-set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v5.zip
+set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v6.zip
 if exist "%OUT_ZIP%" del "%OUT_ZIP%"
 
 powershell -NoProfile -NonInteractive -Command ^
@@ -490,7 +507,7 @@ if not exist "%OUT_ZIP%" (
 for %%F in ("%OUT_ZIP%") do (
     set /a ZIP_MB=%%~zF / 1048576
 )
-echo Done! Created: vcg-deps-v5.zip  (!ZIP_MB! MB)
+echo Done! Created: vcg-deps-v6.zip  (!ZIP_MB! MB)
 
 REM ── Cleanup ───────────────────────────────────────────────────
 rmdir /s /q "%BUILD_DIR%"
@@ -500,14 +517,14 @@ echo ============================================================
 echo  NEXT STEPS:
 echo ============================================================
 echo.
-echo  1. Upload vcg-deps-v5.zip to GitHub as a release asset:
+echo  1. Upload vcg-deps-v6.zip to GitHub as a release asset:
 echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
-echo       Tag: v5
-echo       Asset filename: vcg-deps-v5.zip
+echo       Tag: v6
+echo       Asset filename: vcg-deps-v6.zip
 echo.
 echo  2. Copy the direct download URL and update DEPS_ZIP_URL
 echo     in vcg_deinterlacer_beta_0_5.py:
-echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/download/v5/vcg-deps-v5.zip
+echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/download/v6/vcg-deps-v6.zip
 echo.
 echo  3. Rebuild the app EXE with build_vcg_deinterlacer.bat
 echo.
