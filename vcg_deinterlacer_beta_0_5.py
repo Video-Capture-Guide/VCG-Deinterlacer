@@ -1107,9 +1107,10 @@ def generate_vpy_script(config):
     lines.append('    clip = core.resize.Spline36(clip, format=vs.YUV422P8)')
     lines.append('elif clip.format.color_family == vs.RGB:')
     lines.append('    # RGB source (e.g. Lagarith RGB, HuffYUV RGB) — must specify matrix for RGB->YUV')
-    # VapourSynth does not accept "601" — use "470bg" (PAL BT.470BG) or "170m" (NTSC SMPTE 170M)
+    # matrix_s = OUTPUT matrix (required when converting TO YUV from RGB)
+    # "170m" = SMPTE 170M / BT.601 for NTSC;  "470bg" = BT.470BG / BT.601 for PAL
     rgb_matrix = '"470bg"' if config.get('format') == 'pal' else '"170m"'
-    lines.append(f'    clip = core.resize.Spline36(clip, format=vs.YUV422P8, matrix_in_s={rgb_matrix})')
+    lines.append(f'    clip = core.resize.Spline36(clip, format=vs.YUV422P8, matrix_s={rgb_matrix})')
     lines.append('elif clip.format.id not in [vs.YUV420P8, vs.YUV422P8, vs.YUV444P8, vs.YUV420P10, vs.YUV422P10, vs.YUV444P10, vs.GRAY8, vs.GRAY16]:')
     lines.append('    # Convert other unsupported formats to YUV422')
     lines.append('    clip = core.resize.Spline36(clip, format=vs.YUV422P8)')
