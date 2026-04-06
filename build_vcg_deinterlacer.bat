@@ -167,6 +167,7 @@ set PIL_MODULES=^
 python -m nuitka ^
     --standalone ^
     --onefile ^
+    --onefile-tempdir-spec={CACHE_DIR}/VCGDeinterlacer ^
     --lto=no ^
     --jobs=2 ^
     --windows-console-mode=force ^
@@ -179,8 +180,8 @@ python -m nuitka ^
     %LOGO_OPTION% ^
     --company-name="VideoCaptureGuide" ^
     --product-name="VCG Deinterlacer" ^
-    --file-version="0.6.0.0" ^
-    --product-version="0.6.0.0" ^
+    --file-version="0.6.1.0" ^
+    --product-version="0.6.1.0" ^
     --file-description="VCG Deinterlacer - Analog Video Restoration Tool" ^
     --copyright="Copyright (c) 2026 VideoCaptureGuide" ^
     --output-filename=VCG_Deinterlacer.exe ^

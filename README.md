@@ -192,6 +192,7 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
+| Beta-02b | 2026-04-05 | Fix RGB source support; faster launch via persistent cache dir |
 | Beta-02 | 2026-03-28 | Portable ZIP; first-run auto-setup; no installer |
 | Beta-01 | 2026-03-23 | Inno Setup installer; manual FFmpeg/VapourSynth install |
 | Beta 0.4 | 2026-03-17 | First working installer build |

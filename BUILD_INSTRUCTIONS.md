@@ -230,6 +230,7 @@ _deps\
 
 | Version | Date | Notes |
 |---------|------|-------|
+| Beta-02b | 2026-04-05 | Fix RGB source (Lagarith/HuffYUV RGB); EXE now caches to AppData instead of Temp |
 | Beta-02 | 2026-03-28 | Portable ZIP distribution; first-run setup built into app; no installer |
 | Beta-01 | 2026-03-23 | Auto-installs FFmpeg + VapourSynth; Inno Setup installer; deploys to %LOCALAPPDATA% |
 | Beta 0.4 | 2026-03-17 | First working installer build |
