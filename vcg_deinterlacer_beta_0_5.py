@@ -55,8 +55,8 @@
 # ============================================================
 
 # Version constants
-VERSION = "Beta-02b"
-BUILD_DATE = "2026-04-05"
+VERSION = "Beta-03"
+BUILD_DATE = "2026-04-10"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -533,6 +533,118 @@ def run_hidden(cmd, **kwargs):
             stdout = ""
             stderr = str(e)
         return FakeResult()
+
+# ============================================================
+# Preview Frame Extraction
+# ============================================================
+
+def extract_preview_frame(filepath, frame_num=200):
+    """Extract a single preview frame from a video file using FFmpeg.
+
+    Tries frame *frame_num* first; falls back to frame 0 for short clips.
+    Returns the path to a temp PNG file, or None on failure.
+    """
+    tmp = os.path.join(tempfile.gettempdir(),
+                       f'vcg_preview_{os.getpid()}_{frame_num}.png')
+    # Select frame by index (0-based)
+    cmd = [FFMPEG_PATH, '-y', '-i', filepath,
+           '-vf', f'select=eq(n\\,{frame_num})',
+           '-vframes', '1', '-pix_fmt', 'rgb24', tmp]
+    result = run_hidden(cmd, timeout=30)
+    if result.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 100:
+        return tmp
+    # Fallback: first frame
+    cmd0 = [FFMPEG_PATH, '-y', '-i', filepath,
+            '-vframes', '1', '-pix_fmt', 'rgb24', tmp]
+    result0 = run_hidden(cmd0, timeout=30)
+    if result0.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 100:
+        return tmp
+    return None
+
+
+# ============================================================
+# Telecine / IVTC Detection
+# ============================================================
+
+def detect_telecine(filepath, video_format):
+    """Detect 3:2 (NTSC) or 2:2 (PAL) pulldown patterns via FFmpeg idet.
+
+    Runs idet on up to 500 frames.  A significant fraction of progressive
+    frames embedded in otherwise-interlaced content is the signature of
+    film-to-video telecine transfer.
+
+    Returns a dict::
+
+        {
+          'detected'   : bool,
+          'pattern'    : '3:2' | '2:2' | None,
+          'confidence' : 'high' | 'low' | None,
+          'target_fps' : float | None,
+          'description': str,
+        }
+    """
+    result = {
+        'detected': False, 'pattern': None, 'confidence': None,
+        'target_fps': None,
+        'description': 'No telecine pattern detected.',
+    }
+    try:
+        import re
+        cmd = [FFMPEG_PATH, '-i', filepath, '-vf', 'idet',
+               '-frames:v', '500', '-an', '-f', 'null', '-']
+        r = run_hidden(cmd, timeout=90)
+        output = r.stderr or ''
+
+        tff = bff = prog = 0
+        for line in output.split('\n'):
+            if 'Multi frame detection' in line:
+                m = re.search(r'TFF:\s*(\d+)', line, re.IGNORECASE)
+                if m: tff = int(m.group(1))
+                m = re.search(r'BFF:\s*(\d+)', line, re.IGNORECASE)
+                if m: bff = int(m.group(1))
+                m = re.search(r'Progressive:\s*(\d+)', line, re.IGNORECASE)
+                if m: prog = int(m.group(1))
+
+        total = tff + bff + prog
+        if total < 20:
+            return result
+
+        interlaced = tff + bff
+        prog_ratio = prog / total if total > 0 else 0
+
+        # Telecine: significant progressive frames inside interlaced content
+        # 3:2 pulldown produces ~40% progressive frames  (2 of every 5)
+        if interlaced > 0 and prog_ratio > 0.15:
+            if video_format == 'ntsc' and prog_ratio > 0.28:
+                result.update({
+                    'detected': True,
+                    'pattern': '3:2',
+                    'confidence': 'high' if prog_ratio > 0.35 else 'low',
+                    'target_fps': 24000 / 1001,
+                    'description': (
+                        f'3:2 NTSC pulldown detected '
+                        f'({prog_ratio*100:.0f}% progressive frames in sample). '
+                        f'This is 24fps film transferred to 29.97fps. '
+                        f'Inverse telecine will restore the native 23.976fps.'
+                    ),
+                })
+            elif video_format == 'pal' and prog_ratio > 0.28:
+                result.update({
+                    'detected': True,
+                    'pattern': '2:2',
+                    'confidence': 'high' if prog_ratio > 0.35 else 'low',
+                    'target_fps': 25.0,
+                    'description': (
+                        f'2:2 PAL pulldown detected '
+                        f'({prog_ratio*100:.0f}% progressive frames in sample). '
+                        f'This is film material at 25fps progressive. '
+                        f'Inverse telecine will restore native 25fps progressive frames.'
+                    ),
+                })
+    except Exception as exc:
+        result['description'] = f'Telecine detection error: {exc}'
+    return result
+
 
 # ============================================================
 # Analysis Functions (from v2.4)
@@ -1038,6 +1150,101 @@ def generate_vectorscope_image(filepath):
     return None
 
 # ============================================================
+# Diagnostic Logger  (Feature 5)
+# ============================================================
+
+class DiagnosticLogger:
+    """Incrementally-written diagnostic log for troubleshooting.
+
+    Written with line buffering (buffering=1) so that a crash mid-process
+    still produces a useful partial log.
+    """
+
+    def __init__(self, log_path):
+        self.log_path = log_path
+        self._f = open(log_path, 'w', encoding='utf-8', buffering=1)
+        self._start_time = time.time()
+
+    # ── Public helpers ──────────────────────────────────────────────────────
+
+    def section(self, title):
+        self._write(f"\n{'='*60}")
+        self._write(f" {title}")
+        self._write(f"{'='*60}")
+
+    def kv(self, key, value):
+        self._write(f"  {key:<32} {value}")
+
+    def raw(self, text):
+        for line in str(text).splitlines():
+            self._write(f"  {line}")
+
+    def cmd(self, cmd_list):
+        self._write(f"  CMD: {' '.join(str(c) for c in cmd_list)}")
+
+    def captured(self, label, stdout, stderr):
+        if stdout and stdout.strip():
+            self._write(f"  [{label} stdout]")
+            for line in stdout.strip().splitlines():
+                self._write(f"    {line}")
+        if stderr and stderr.strip():
+            self._write(f"  [{label} stderr]")
+            for line in stderr.strip().splitlines():
+                self._write(f"    {line}")
+
+    def exception(self, exc, tb_text=''):
+        self._write(f"  EXCEPTION: {exc}")
+        if tb_text:
+            for line in tb_text.splitlines():
+                self._write(f"    {line}")
+
+    def timing(self, label):
+        elapsed = time.time() - self._start_time
+        self._write(f"  {label}: {elapsed:.1f}s elapsed")
+
+    def close(self, success=True):
+        total = time.time() - self._start_time
+        self.section("Processing Complete")
+        self._write(f"  Status  : {'SUCCESS' if success else 'FAILED'}")
+        self._write(f"  Duration: {total:.1f} seconds  ({total/60:.1f} min)")
+        self._write(f"  End time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        try:
+            self._f.close()
+        except Exception:
+            pass
+
+    # ── Internal ────────────────────────────────────────────────────────────
+
+    def _write(self, text):
+        ts = time.strftime('%H:%M:%S')
+        try:
+            self._f.write(f"[{ts}] {text}\n")
+        except Exception:
+            pass
+
+
+def _diag_collect_system_info():
+    """Return a dict of OS / hardware info for the diagnostic log."""
+    info = {}
+    try:
+        import platform
+        info['os']      = platform.platform()
+        info['python']  = platform.python_version()
+        info['machine'] = platform.machine()
+        info['cpu']     = platform.processor() or 'unknown'
+    except Exception:
+        pass
+    try:
+        import ctypes
+        ms = ctypes.c_ulonglong(0)
+        ctypes.windll.kernel32.GetPhysicallyInstalledSystemMemory(ctypes.byref(ms))
+        info['ram_gb'] = f"{ms.value / (1024**2):.1f} GB"
+    except Exception:
+        info['ram_gb'] = 'unknown'
+    return info
+
+
+# ============================================================
 # Script Generation
 # ============================================================
 
@@ -1116,26 +1323,88 @@ def generate_vpy_script(config):
     lines.append('    clip = core.resize.Spline36(clip, format=vs.YUV422P8)')
     lines.append('')
     
-    # Crop - only for SD capture (DV doesn't need edge crop)
+    # ── Crop ─────────────────────────────────────────────────────────────────
+    # Four crop presets (Feature 3).  DV defaults to 'none'; SD defaults to 'bt601'.
     capture_method = config.get('capture_method', 'sd')
-    if capture_method == 'sd':
-        lines.append('# Crop edges (SD capture only)')
-        lines.append(f'clip = core.std.Crop(clip, left={config.get("crop_left", 8)}, right={config.get("crop_right", 8)})')
+    crop_preset = config.get('crop_preset', 'none' if capture_method == 'dv' else 'bt601')
+
+    # SAR metadata is only adjusted for the overscan preset (Option 2).
+    # Options:
+    #   bt601   — BT.601 Active Picture: 8px L+R, 0 top/bottom (default SD)
+    #             NTSC: 704×480   PAL: 704×576
+    #   overscan — Full Overscan Clean: 8px L+R, 2px top, 4px bottom
+    #             NTSC: 704×474   PAL: 704×570
+    #             SAR adjusted so DAR = 4:3:
+    #               NTSC 704×474 → SAR 79:88  (display width ≈ 632, 632/474 ≈ 4:3)
+    #               PAL  704×570 → SAR 95:88  (display width ≈ 760, 760/570 ≈ 4:3)
+    #   manual  — user-defined left/right/top/bottom offsets
+    #   none    — no crop (DV default)
+
+    overscan_sar = False
+    if crop_preset == 'bt601':
+        lines.append('# Crop to BT.601 Active Picture area (SD capture — removes blanking edges)')
+        lines.append('clip = core.std.Crop(clip, left=8, right=8, top=0, bottom=0)')
         lines.append('')
-    
-    # QTGMC
-    tff = config.get('field_order') == 'tff'
-    lines.append('# QTGMC Deinterlacing')
-    lines.append('clip = haf.QTGMC(')
-    lines.append('    clip,')
-    lines.append(f'    TFF={tff},')
-    for key, value in QTGMC_SETTINGS.items():
-        lines.append(f'    {key}={value},')
-    lines[-1] = lines[-1].rstrip(',')
-    lines.append(')')
-    lines.append('')
-    
-    # Denoising
+    elif crop_preset == 'overscan':
+        if video_format == 'ntsc':
+            lines.append('# Full Overscan Clean crop (NTSC → 704×474, SAR 79:88 for 4:3 DAR)')
+            lines.append('clip = core.std.Crop(clip, left=8, right=8, top=2, bottom=4)')
+        else:
+            lines.append('# Full Overscan Clean crop (PAL → 704×570, SAR 95:88 for 4:3 DAR)')
+            lines.append('clip = core.std.Crop(clip, left=8, right=8, top=2, bottom=4)')
+        lines.append('')
+        overscan_sar = True
+    elif crop_preset == 'manual':
+        cl = config.get('crop_left', 8)
+        cr = config.get('crop_right', 8)
+        ct = config.get('crop_top', 0)
+        cb_px = config.get('crop_bottom', 0)
+        lines.append(f'# Manual crop (left={cl}, right={cr}, top={ct}, bottom={cb_px})')
+        lines.append(f'clip = core.std.Crop(clip, left={cl}, right={cr}, top={ct}, bottom={cb_px})')
+        lines.append('')
+    # crop_preset == 'none': no crop
+
+    # ── Deinterlacing / IVTC ─────────────────────────────────────────────────
+    field_order = config.get('field_order', 'tff')
+    ivtc_mode   = config.get('ivtc_mode', False)
+
+    if field_order == 'progressive':
+        lines.append('# Progressive source — deinterlacing skipped')
+        lines.append('')
+    elif ivtc_mode:
+        # Inverse Telecine via vivtc — restores native progressive frame rate
+        order = 1 if field_order == 'tff' else 0
+        lines.append('# Inverse Telecine (vivtc) — removing 3:2 / 2:2 pulldown')
+        lines.append(f'clip = core.vivtc.VFM(clip, order={order})')
+        lines.append('clip = core.vivtc.VDecimate(clip)')
+        lines.append('')
+    else:
+        tff = field_order == 'tff'
+        lines.append('# QTGMC Deinterlacing')
+        lines.append('clip = haf.QTGMC(')
+        lines.append('    clip,')
+        lines.append(f'    TFF={tff},')
+        for key, value in QTGMC_SETTINGS.items():
+            lines.append(f'    {key}={value},')
+        lines[-1] = lines[-1].rstrip(',')
+        lines.append(')')
+        lines.append('')
+
+    # ── Y/C Delay correction (Feature 1) ─────────────────────────────────────
+    # Per-file horizontal chroma shift: split planes, shift U+V, merge back.
+    # The luma (Y) plane is unchanged; only the U and V chroma planes are shifted.
+    yc_delay = config.get('yc_delay', 0)
+    if yc_delay != 0:
+        lines.append(f'# Y/C delay correction — chroma horizontal shift: {yc_delay:+d} px')
+        lines.append('_yp = core.std.ShufflePlanes(clip, planes=0, colorfamily=vs.GRAY)')
+        lines.append('_up = core.std.ShufflePlanes(clip, planes=1, colorfamily=vs.GRAY)')
+        lines.append('_vp = core.std.ShufflePlanes(clip, planes=2, colorfamily=vs.GRAY)')
+        lines.append(f'_us = core.resize.Point(_up, src_left={yc_delay})')
+        lines.append(f'_vs = core.resize.Point(_vp, src_left={yc_delay})')
+        lines.append('clip = core.std.ShufflePlanes([_yp, _us, _vs], planes=[0, 0, 0], colorfamily=vs.YUV)')
+        lines.append('')
+
+    # ── Denoising ─────────────────────────────────────────────────────────────
     noise_level = config.get('noise_level', 'none')
     if noise_level == 'moderate':
         lines.append('# Temporal denoising (moderate)')
@@ -1145,20 +1414,20 @@ def generate_vpy_script(config):
         lines.append('# Temporal denoising (heavy)')
         lines.append('clip = haf.SMDegrain(clip, tr=2, thSAD=400)')
         lines.append('')
-    
-    # Chroma shift
+
+    # ── Legacy chroma-shift flag (kept for back-compat) ──────────────────────
     if config.get('chroma_shift', False):
-        lines.append('# Chroma shift correction')
+        lines.append('# Chroma shift correction (legacy color-bleeding fix)')
         lines.append('clip = core.resize.Point(clip, src_left=2, src_top=2)')
         lines.append('')
-    
-    # Dropout removal
+
+    # ── Dropout removal ───────────────────────────────────────────────────────
     if config.get('dropout_removal', False):
         lines.append('# Dropout removal')
         lines.append('clip = core.rgvs.Clense(clip)')
         lines.append('')
-    
-    # Color correction
+
+    # ── Color correction ──────────────────────────────────────────────────────
     color_corr = config.get('color_correction', 'none')
     if color_corr == 'auto_fix':
         u_corr = config.get('u_correction', 0)
@@ -1174,9 +1443,6 @@ def generate_vpy_script(config):
         v_corr = config.get('v_correction', 0)
         lines.append('# Auto color cast correction + saturation boost')
         lines.append(f'# Shifting U by {u_corr:.1f} and V by {v_corr:.1f} toward neutral, then boosting saturation')
-        # Combined expression: first shift toward neutral, then boost saturation
-        # (x + correction - 128) * 1.2 + 128 = x * 1.2 + correction * 1.2 - 128 * 1.2 + 128
-        # Simplified: shift then scale around 128
         u_expr = f"x {u_corr:.1f} + 128 - 1.2 * 128 +" if u_corr >= 0 else f"x {abs(u_corr):.1f} - 128 - 1.2 * 128 +"
         v_expr = f"x {v_corr:.1f} + 128 - 1.2 * 128 +" if v_corr >= 0 else f"x {abs(v_corr):.1f} - 128 - 1.2 * 128 +"
         lines.append(f'clip = core.std.Expr([clip], ["", "{u_expr}", "{v_expr}"])')
@@ -1189,8 +1455,8 @@ def generate_vpy_script(config):
         lines.append('# Reduce saturation')
         lines.append('clip = core.std.Expr([clip], ["", "x 128 - 0.8 * 128 +", "x 128 - 0.8 * 128 +"])')
         lines.append('')
-    
-    # Levels (Y plane only)
+
+    # ── Levels (Y plane only) ─────────────────────────────────────────────────
     levels_adj = config.get('levels_adjustment', 'none')
     if levels_adj == 'clamp':
         lines.append('# Clamp luma levels to legal range (16-235)')
@@ -1200,22 +1466,41 @@ def generate_vpy_script(config):
         lines.append('# Stretch luma to legal range (16-235)')
         lines.append('clip = core.std.Levels(clip, min_in=0, max_in=255, min_out=16, max_out=235, gamma=1.0, planes=[0])')
         lines.append('')
-    
-    # PAR correction - scale to standard square pixel resolutions
-    # Note: We scale to fixed output sizes regardless of input crop
-    if config.get('par_correction', True):
-        if config.get('format') == 'ntsc':
-            # NTSC: Output 640x480 (standard square pixel SD)
-            lines.append('# PAR correction to 640x480 square pixels')
+
+    # ── PAR correction / output sizing ────────────────────────────────────────
+    # Overscan preset: preserve exact cropped dimensions; set SAR so player
+    # renders the clip at the correct 4:3 display aspect ratio.
+    if overscan_sar:
+        if video_format == 'ntsc':
+            # 704×474, SAR 79:88 → display width = 704×79/88 ≈ 632 → 632/474 ≈ 4:3
+            lines.append('# Set pixel aspect ratio for 4:3 DAR (NTSC overscan clean 704×474)')
+            lines.append('clip = core.std.SetFrameProps(clip, _SARNum=79, _SARDen=88)')
+        else:
+            # 704×570, SAR 95:88 → display width = 704×95/88 ≈ 760 → 760/570 ≈ 4:3
+            lines.append('# Set pixel aspect ratio for 4:3 DAR (PAL overscan clean 704×570)')
+            lines.append('clip = core.std.SetFrameProps(clip, _SARNum=95, _SARDen=88)')
+        lines.append('')
+    elif config.get('par_correction', True) and crop_preset != 'none':
+        if video_format == 'ntsc':
+            lines.append('# PAR correction → 640×480 square pixels')
             lines.append('clip = core.resize.Spline36(clip, width=640, height=480)')
         else:
-            # PAL: Output 768x576 (standard square pixel SD) 
-            lines.append('# PAR correction to 768x576 square pixels')
+            lines.append('# PAR correction → 768×576 square pixels')
             lines.append('clip = core.resize.Spline36(clip, width=768, height=576)')
         lines.append('')
-    
+    elif config.get('par_correction', True) and crop_preset == 'none':
+        # No crop (DV or explicit none): still correct PAR
+        if video_format == 'ntsc':
+            lines.append('# PAR correction → 640×480 square pixels (no crop path)')
+            lines.append('clip = core.resize.Spline36(clip, width=640, height=480)')
+        else:
+            lines.append('# PAR correction → 768×576 square pixels (no crop path)')
+            lines.append('clip = core.resize.Spline36(clip, width=768, height=576)')
+        lines.append('')
+
     lines.append('clip.set_output()')
     return '\n'.join(lines)
+
 
 def get_ffmpeg_output_args(config):
     fmt = config.get('output_format', 'prores')
@@ -2263,19 +2548,21 @@ class RestorationWizard(BaseWindow):
             "Welcome",         # 0  — hidden from breadcrumb
             "Select File",     # 1  → crumb 1
             "Source",          # 2  → crumb 2
-            "Noise",           # 3  → crumb 3 "Advanced"
-            "Color Bleeding",  # 4  → crumb 3 "Advanced"
-            "Color Cast",      # 5  → crumb 3 "Advanced"
-            "Levels",          # 6  → crumb 3 "Advanced"
-            "Audio",           # 7  → crumb 3 "Advanced"
-            "Finalize",        # 8  → crumb 4
+            "Y/C Delay",       # 3  → crumb 2  (SD only; skipped for DV)
+            "Crop",            # 4  → crumb 2
+            "Noise",           # 5  → crumb 3 "Advanced"
+            "Color Bleeding",  # 6  → crumb 3 "Advanced"
+            "Color Cast",      # 7  → crumb 3 "Advanced"
+            "Levels",          # 8  → crumb 3 "Advanced"
+            "Audio",           # 9  → crumb 3 "Advanced"
+            "Finalize",        # 10 → crumb 4
         ]
         # Breadcrumb display groups: each entry = (label, [step_indices])
         self.crumbs = [
             ("Select File", [1]),
-            ("Source",      [2]),
-            ("Advanced",    [3, 4, 5, 6, 7]),
-            ("Finalize",    [8]),
+            ("Source",      [2, 3, 4]),
+            ("Advanced",    [5, 6, 7, 8, 9]),
+            ("Finalize",    [10]),
         ]
         self.current_step = 0
         
@@ -2635,24 +2922,26 @@ class RestorationWizard(BaseWindow):
         # Update navigation buttons
         self.back_btn.set_disabled(step_index <= 1)
         # On the last advanced page, label the button to indicate Finalize is next
-        if step_index == 7:
+        if step_index == 9:
             self.next_btn.text = "Finalize →"
         else:
             self.next_btn.text = "Next →"
         self.next_btn.set_disabled(False)
         self.next_btn._draw()
 
-        # Show appropriate page (9-step navigation)
+        # Show appropriate page (11-step navigation)
         step_methods = [
             self._page_welcome,         # 0
             self._page_select_file,     # 1
             self._page_source_details,  # 2
-            self._page_noise,           # 3  Advanced ①
-            self._page_chroma,          # 4  Advanced ② Color Bleeding
-            self._page_color,           # 5  Advanced ③ Color Cast
-            self._page_levels,          # 6  Advanced ④
-            self._page_audio,           # 7  Advanced ⑤
-            self._page_finalize,        # 8
+            self._page_yc_delay,        # 3  Y/C Delay (SD only)
+            self._page_crop_preset,     # 4  Crop Preset
+            self._page_noise,           # 5  Advanced ①
+            self._page_chroma,          # 6  Advanced ② Color Bleeding
+            self._page_color,           # 7  Advanced ③ Color Cast
+            self._page_levels,          # 8  Advanced ④
+            self._page_audio,           # 9  Advanced ⑤
+            self._page_finalize,        # 10
         ]
 
         if step_index < len(step_methods):
@@ -2667,12 +2956,24 @@ class RestorationWizard(BaseWindow):
                                        "Please select at least one video file.")
                 return
             if len(files) > 1:
-                # Run batch type validation then advance if OK
                 self._validate_batch_types(files, on_ok=lambda: self._show_step(2))
                 return
 
-        # ── Step 2: Source Details → show "Process Now or Advanced?" ──────────
+        # ── Step 2: Source Details → Y/C Delay (SD) or Crop (DV) ─────────────
         if self.current_step == 2:
+            if self.config_data.get('capture_method') == 'sd':
+                self._show_step(3)  # Y/C Delay
+            else:
+                self._show_step(4)  # Skip Y/C for DV; go to Crop
+            return
+
+        # ── Step 3: Y/C Delay → Crop ──────────────────────────────────────────
+        if self.current_step == 3:
+            self._show_step(4)
+            return
+
+        # ── Step 4: Crop → "Process Now or Advanced?" ─────────────────────────
+        if self.current_step == 4:
             self._ask_basic_or_advanced()
             return
 
@@ -2683,9 +2984,9 @@ class RestorationWizard(BaseWindow):
         self._show_step(self.current_step + 1)
 
     def _ask_basic_or_advanced(self):
-        """After Field Order, let the user choose to process now or configure advanced options."""
-        finalize_step = 8   # "Finalize" in the 9-step list
-        advanced_step = 3   # First advanced page ("Noise")
+        """After Crop, let the user choose to process now or configure advanced options."""
+        finalize_step = 10  # "Finalize" in the 11-step list
+        advanced_step = 5   # First advanced page ("Noise")
 
         dlg = tk.Toplevel(self)
         dlg.title("Ready to process?")
@@ -2801,7 +3102,11 @@ class RestorationWizard(BaseWindow):
 
     def _prev_step(self):
         if self.current_step > 0:
-            self._show_step(self.current_step - 1)
+            target = self.current_step - 1
+            # Skip Y/C Delay (step 3) when going back if capture is DV
+            if target == 3 and self.config_data.get('capture_method') != 'sd':
+                target = 2
+            self._show_step(target)
     
     # ==================== STEP PAGES ====================
     
@@ -3140,10 +3445,680 @@ class RestorationWizard(BaseWindow):
             rerun_row.pack(anchor='w', pady=(8, 0))
             ModernButton(rerun_row, "Re-run Detection",
                          self._run_field_order_detection, width=150).pack(side='left')
+            ModernButton(rerun_row, "Visual Comparison",
+                         self._run_field_order_visual, width=150).pack(side='left', padx=(10, 0))
             # Point the existing badge variable at our new badge label
             self.detect_badge_lbl = self._fo_badge_lbl
             # Auto-trigger detection after a short delay
             self.after(400, self._run_field_order_detection)
+
+        # ════════════════════════════════════════════════════════════════════
+        # 4 — TELECINE / INVERSE TELECINE DETECTION  (Feature 2)
+        # ════════════════════════════════════════════════════════════════════
+        ttk.Separator(self.page_container, orient='horizontal').pack(fill='x', pady=(20, 0))
+
+        ivtc_row = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        ivtc_row.pack(fill='x', pady=(12, 6))
+        tk.Label(ivtc_row, text="4. Telecine / Pulldown Detection",
+                 font=('Segoe UI', 13, 'bold'),
+                 fg=Colors.ACCENT, bg=Colors.BG_MAIN).pack(side='left')
+
+        prior_ivtc = self.config_data.get('ivtc_result')
+        _ivtc_badge_text = '  ⏳ Analyzing…'
+        _ivtc_badge_color = Colors.ACCENT
+        if prior_ivtc:
+            if prior_ivtc.get('detected'):
+                _ivtc_badge_text = f"  ⚠  Telecine detected ({prior_ivtc['pattern']})"
+                _ivtc_badge_color = Colors.WARNING
+            else:
+                _ivtc_badge_text = '  ✓ No telecine detected'
+                _ivtc_badge_color = Colors.SUCCESS
+
+        self._ivtc_badge = tk.Label(ivtc_row, text=_ivtc_badge_text,
+                                     font=('Segoe UI', 11, 'bold'),
+                                     fg=_ivtc_badge_color, bg=Colors.BG_MAIN)
+        self._ivtc_badge.pack(side='right')
+
+        ivtc_desc = tk.Label(
+            self.page_container,
+            text="Telecine (3:2 pulldown) is applied when film is transferred to interlaced video. "
+                 "If detected, VCG can apply Inverse Telecine (IVTC) to restore the original "
+                 "progressive frame rate instead of running standard deinterlacing.",
+            font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+            wraplength=620, justify='left')
+        ivtc_desc.pack(anchor='w', pady=(0, 8))
+
+        # Container for detection result card (populated when detection finishes)
+        self._ivtc_result_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        self._ivtc_result_frame.pack(fill='x')
+
+        # IVTC mode radio buttons (shown when detection result arrives)
+        self._ivtc_mode_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        self._ivtc_mode_frame.pack(fill='x')
+
+        # Show previously-detected result immediately if available
+        if prior_ivtc:
+            self.after(0, lambda: self._show_ivtc_result(prior_ivtc))
+
+        # Trigger detection for single-file mode
+        if num_files <= 1:
+            self.after(600, self._run_ivtc_detection)
+
+    # ── IVTC detection helpers ──────────────────────────────────────────────
+
+    def _run_ivtc_detection(self):
+        """Run telecine detection in a background thread."""
+        files = self.config_data.get('input_files', [])
+        filepath = files[0] if files else self.config_data.get('input_path')
+        if not filepath:
+            return
+        video_format = self.config_data.get('format', 'ntsc')
+
+        def worker():
+            result = detect_telecine(filepath, video_format)
+            self.config_data['ivtc_result'] = result
+            self.after(0, lambda: self._show_ivtc_result(result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_ivtc_result(self, result):
+        """Display IVTC detection result on the Source Details page."""
+        if not hasattr(self, '_ivtc_badge') or not self._ivtc_badge.winfo_exists():
+            return
+
+        # Update badge
+        if result.get('detected'):
+            pattern = result.get('pattern', '?:?')
+            conf = result.get('confidence', '')
+            self._ivtc_badge.config(
+                text=f"  ⚠  {pattern} pulldown detected  ({conf} confidence)",
+                fg=Colors.WARNING)
+        else:
+            self._ivtc_badge.config(text='  ✓ No telecine detected', fg=Colors.SUCCESS)
+
+        # Clear previous result widgets
+        for w in self._ivtc_result_frame.winfo_children():
+            w.destroy()
+        for w in self._ivtc_mode_frame.winfo_children():
+            w.destroy()
+
+        if result.get('detected'):
+            # Alert card
+            alert = tk.Frame(self._ivtc_result_frame, bg='#2A1E00', padx=14, pady=12)
+            alert.pack(fill='x', pady=(4, 8))
+            hdr = tk.Frame(alert, bg='#2A1E00')
+            hdr.pack(fill='x')
+            tk.Label(hdr, text="⚠", font=('Segoe UI', 16), fg=Colors.WARNING,
+                     bg='#2A1E00').pack(side='left', padx=(0, 8))
+            tk.Label(hdr, text="Telecined content detected — Inverse Telecine available",
+                     font=('Segoe UI', 11, 'bold'), fg=Colors.WARNING,
+                     bg='#2A1E00').pack(side='left')
+            pattern = result.get('pattern', '')
+            target_fps = result.get('target_fps', 0)
+            fps_str = '23.976 fps' if pattern == '3:2' else '25 fps progressive'
+            detail = (
+                f"Pattern: {pattern} pulldown  →  native frame rate: {fps_str}\n"
+                f"{result.get('description', '')}\n\n"
+                "VCG will apply vivtc.VFM + vivtc.VDecimate to reconstruct "
+                "the original progressive frames."
+            )
+            tk.Label(alert, text=detail, font=('Segoe UI', 10),
+                     fg='#D0A060', bg='#2A1E00',
+                     wraplength=580, justify='left').pack(anchor='w', pady=(6, 0))
+
+            # User choice
+            initial_ivtc = self.config_data.get('ivtc_mode', True)
+            self.config_data['ivtc_mode'] = initial_ivtc
+            ivtc_var = tk.BooleanVar(value=initial_ivtc)
+            choice_card = tk.Frame(self._ivtc_mode_frame, bg=Colors.BG_CARD)
+            choice_card.pack(fill='x', pady=(0, 8))
+            tk.Label(choice_card, text="How would you like to process this content?",
+                     font=('Segoe UI', 11, 'bold'), fg=Colors.TEXT_PRIMARY,
+                     bg=Colors.BG_CARD, padx=12, pady=(10, 6)).pack(anchor='w')
+
+            def _on_ivtc_change(*_):
+                self.config_data['ivtc_mode'] = ivtc_var.get()
+
+            for row_text, row_desc, row_val in [
+                ("Apply Inverse Telecine (recommended)",
+                 f"Restore original {fps_str} — removes pulldown fields", True),
+                ("Use Standard Deinterlacing",
+                 "Keep 29.97fps output using QTGMC (ignores telecine)", False),
+            ]:
+                rb = ModernRadioButton(choice_card, row_text, ivtc_var, row_val, row_desc)
+                rb.pack(fill='x')
+                ttk.Separator(choice_card, orient='horizontal').pack(fill='x', padx=12)
+
+            ivtc_var.trace_add('write', _on_ivtc_change)
+        else:
+            # No telecine — ensure ivtc_mode is False
+            self.config_data['ivtc_mode'] = False
+            no_tc = tk.Frame(self._ivtc_result_frame, bg=Colors.BG_CARD, padx=12, pady=10)
+            no_tc.pack(fill='x', pady=(4, 8))
+            tk.Label(no_tc, text="✓ No telecine pattern detected — standard deinterlacing will be used.",
+                     font=('Segoe UI', 11), fg=Colors.SUCCESS, bg=Colors.BG_CARD).pack(anchor='w')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 3 — Y/C DELAY CORRECTION  (Feature 1)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _page_yc_delay(self):
+        """Step 3 — Y/C Delay (chroma horizontal shift) per file."""
+        files = self.config_data.get('input_files', [])
+        if not files and 'input_path' in self.config_data:
+            files = [self.config_data['input_path']]
+
+        # Initialise per-file settings storage
+        if 'per_file_settings' not in self.config_data:
+            self.config_data['per_file_settings'] = {}
+        for fp in files:
+            self.config_data['per_file_settings'].setdefault(fp, {})
+
+        self._yc_files = files
+        self._yc_file_idx = 0
+        self._yc_src_img = None   # PIL Image of the current preview frame
+        self._render_yc_page()
+
+    def _render_yc_page(self):
+        """(Re-)build the Y/C Delay page for the current file index."""
+        self._clear_page()
+        files = self._yc_files
+        if not files:
+            tk.Label(self.page_container, text="No files selected.",
+                     font=('Segoe UI', 13), fg=Colors.ERROR,
+                     bg=Colors.BG_MAIN).pack(anchor='w', pady=20)
+            return
+
+        current_file = files[self._yc_file_idx]
+        per_file = self.config_data['per_file_settings'][current_file]
+        current_delay = per_file.get('yc_delay', 0)
+
+        # ── Page title ──────────────────────────────────────────────────────
+        tk.Label(self.page_container, text="Y/C Delay Correction",
+                 font=('Segoe UI', 22, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+
+        if len(files) > 1:
+            tk.Label(self.page_container,
+                     text=f"File {self._yc_file_idx + 1} of {len(files)}: "
+                          f"{os.path.basename(current_file)}",
+                     font=('Segoe UI', 12, 'bold'),
+                     fg=Colors.ACCENT, bg=Colors.BG_MAIN).pack(anchor='w', pady=(4, 0))
+
+        # ── Info card ──────────────────────────────────────────────────────
+        info = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=15, pady=12)
+        info.pack(fill='x', pady=(12, 8))
+        tk.Label(info, text="What is Y/C Delay?",
+                 font=('Segoe UI', 11, 'bold'),
+                 fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(anchor='w')
+        tk.Label(
+            info,
+            text="Y/C delay is a horizontal misalignment between the luma (Y) brightness "
+                 "signal and the chroma (C) colour signal. It is common with analog composite "
+                 "formats (VHS, Hi8) and worsens with multigenerational copies or worn tapes. "
+                 "It appears as a coloured fringe — usually red/cyan or blue/yellow — "
+                 "on sharp vertical edges.\n\n"
+                 "Adjust the slider until the coloured fringe on vertical edges disappears. "
+                 "Use the zoom region to spot subtle misalignment. Typical values: −3 to +3 px.",
+            font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+            wraplength=580, justify='left').pack(anchor='w', pady=(5, 0))
+
+        # ── Preview row: full frame + zoom region ──────────────────────────
+        prev_outer = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+        prev_outer.pack(fill='x', pady=(8, 4))
+
+        prev_row = tk.Frame(prev_outer, bg=Colors.BG_CARD)
+        prev_row.pack(padx=10, pady=10, anchor='w')
+
+        # Full frame canvas
+        full_col = tk.Frame(prev_row, bg=Colors.BG_CARD)
+        full_col.pack(side='left', padx=(0, 12))
+        tk.Label(full_col, text="Preview (frame 200)",
+                 font=('Segoe UI', 9, 'bold'), fg=Colors.TEXT_SECONDARY,
+                 bg=Colors.BG_CARD).pack(anchor='w', pady=(0, 3))
+        full_canvas = tk.Canvas(full_col, width=400, height=240,
+                                bg=Colors.BG_DARK, highlightthickness=1,
+                                highlightbackground=Colors.BORDER)
+        full_canvas.pack()
+
+        # Zoom region canvas
+        zoom_col = tk.Frame(prev_row, bg=Colors.BG_CARD)
+        zoom_col.pack(side='left')
+        tk.Label(zoom_col, text="Zoom — centre region (shows chroma fringing)",
+                 font=('Segoe UI', 9, 'bold'), fg=Colors.TEXT_SECONDARY,
+                 bg=Colors.BG_CARD).pack(anchor='w', pady=(0, 3))
+        zoom_canvas = tk.Canvas(zoom_col, width=280, height=240,
+                                bg=Colors.BG_DARK, highlightthickness=1,
+                                highlightbackground=Colors.BORDER)
+        zoom_canvas.pack()
+        tk.Label(zoom_col,
+                 text="Live preview updates as you move the slider",
+                 font=('Segoe UI', 8), fg=Colors.TEXT_HINT,
+                 bg=Colors.BG_CARD).pack(anchor='w', pady=(3, 0))
+
+        loading_lbl = tk.Label(prev_outer, text="⏳ Loading preview frame…",
+                               font=('Segoe UI', 10), fg=Colors.ACCENT,
+                               bg=Colors.BG_CARD)
+        loading_lbl.pack(pady=(0, 6))
+
+        # ── Slider ─────────────────────────────────────────────────────────
+        sl_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        sl_frame.pack(fill='x', pady=(8, 0))
+
+        tk.Label(sl_frame, text="Chroma Horizontal Shift",
+                 font=('Segoe UI', 13, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+        tk.Label(sl_frame, text="Range: −20 to +20 pixels.  Negative = shift chroma left;  "
+                                "Positive = shift chroma right.",
+                 font=('Segoe UI', 10), fg=Colors.TEXT_SECONDARY,
+                 bg=Colors.BG_MAIN).pack(anchor='w', pady=(2, 6))
+
+        sl_row = tk.Frame(sl_frame, bg=Colors.BG_MAIN)
+        sl_row.pack(fill='x')
+        tk.Label(sl_row, text="−20", font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(side='left')
+
+        self._yc_var = tk.IntVar(value=current_delay)
+        slider = tk.Scale(sl_row, from_=-20, to=20, orient='horizontal',
+                          variable=self._yc_var, length=420, showvalue=True,
+                          bg=Colors.BG_MAIN, fg=Colors.TEXT_PRIMARY,
+                          highlightthickness=0, troughcolor=Colors.BG_CARD,
+                          activebackground=Colors.ACCENT,
+                          font=('Segoe UI', 10))
+        slider.pack(side='left', padx=(8, 8))
+        tk.Label(sl_row, text="+20", font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(side='left')
+
+        val_lbl = tk.Label(sl_frame,
+                           text=f"Current value: {current_delay:+d} px",
+                           font=('Segoe UI', 11),
+                           fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN)
+        val_lbl.pack(anchor='w', pady=(4, 0))
+
+        # ── Buttons ─────────────────────────────────────────────────────────
+        btn_row = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        btn_row.pack(fill='x', pady=(10, 0))
+
+        def _reset():
+            self._yc_var.set(0)
+
+        ModernButton(btn_row, "Reset to 0", _reset, width=100).pack(side='left')
+
+        if len(files) > 1:
+            if self._yc_file_idx < len(files) - 1:
+                def _next_file():
+                    self._yc_save_value()
+                    self._yc_file_idx += 1
+                    self._render_yc_page()
+                ModernButton(btn_row, "Next File →",
+                             _next_file, primary=True, width=120).pack(
+                    side='left', padx=(10, 0))
+            if self._yc_file_idx > 0:
+                def _prev_file():
+                    self._yc_save_value()
+                    self._yc_file_idx -= 1
+                    self._render_yc_page()
+                ModernButton(btn_row, "← Prev File",
+                             _prev_file, width=110).pack(side='left', padx=(10, 0))
+
+        # ── Wire up slider changes ──────────────────────────────────────────
+        def _on_slider(*_):
+            val = self._yc_var.get()
+            val_lbl.config(text=f"Current value: {val:+d} px")
+            self._yc_save_value()
+            if self._yc_src_img is not None and HAS_PIL:
+                self._update_yc_zoom(zoom_canvas, self._yc_src_img, val)
+
+        self._yc_var.trace_add('write', _on_slider)
+
+        # ── Load preview frame in background ───────────────────────────────
+        def _load():
+            path = extract_preview_frame(current_file)
+            if path:
+                self.temp_images.append(path)
+                self.after(0, lambda p=path: self._show_yc_full(
+                    full_canvas, zoom_canvas, loading_lbl, p, self._yc_var.get()))
+            else:
+                self.after(0, lambda: loading_lbl.config(
+                    text="⚠ Could not extract preview frame"))
+
+        threading.Thread(target=_load, daemon=True).start()
+
+    def _yc_save_value(self):
+        """Persist current slider value to per-file settings."""
+        if not hasattr(self, '_yc_files') or not self._yc_files:
+            return
+        fp = self._yc_files[self._yc_file_idx]
+        self.config_data['per_file_settings'][fp]['yc_delay'] = self._yc_var.get()
+
+    def _show_yc_full(self, full_canvas, zoom_canvas, loading_lbl, path, initial_delay):
+        """Display the full preview frame and initial zoom region."""
+        if not HAS_PIL:
+            loading_lbl.config(text="(PIL not available — install Pillow for preview)")
+            return
+        try:
+            img = Image.open(path).convert('RGB')
+            self._yc_src_img = img
+
+            # Full frame → fit into 400×240
+            fw, fh = img.size
+            scale = min(400 / fw, 240 / fh)
+            display_w, display_h = int(fw * scale), int(fh * scale)
+            thumb = img.resize((display_w, display_h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(thumb)
+            full_canvas._vcg_photo = photo
+            full_canvas.delete('all')
+            full_canvas.create_image(200, 120, image=photo)
+
+            loading_lbl.config(text="")
+            self._update_yc_zoom(zoom_canvas, img, initial_delay)
+        except Exception as exc:
+            loading_lbl.config(text=f"Preview error: {exc}")
+
+    def _update_yc_zoom(self, zoom_canvas, src_img, yc_delay):
+        """Render the zoom region with simulated chroma shift."""
+        if not HAS_PIL:
+            return
+        try:
+            import numpy as np
+            w, h = src_img.size
+            # Crop centre 30% width × 50% height
+            cw, ch = max(80, w // 3), max(60, h // 2)
+            cx, cy = w // 2, h // 2
+            region = src_img.crop((cx - cw // 2, cy - ch // 2,
+                                   cx + cw // 2, cy + ch // 2))
+            # Simulate chroma shift in YCbCr
+            ycbcr = region.convert('YCbCr')
+            arr = np.array(ycbcr, dtype=np.uint8)
+            if yc_delay != 0:
+                arr[:, :, 1] = np.roll(arr[:, :, 1], yc_delay, axis=1)
+                arr[:, :, 2] = np.roll(arr[:, :, 2], yc_delay, axis=1)
+            shifted = Image.fromarray(arr, 'YCbCr').convert('RGB')
+            zoom = shifted.resize((280, 240), Image.NEAREST)
+            photo = ImageTk.PhotoImage(zoom)
+            zoom_canvas._vcg_photo = photo
+            zoom_canvas.delete('all')
+            zoom_canvas.create_image(140, 120, image=photo)
+        except Exception:
+            pass  # numpy may not be available; zoom just stays blank
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 4 — CROP PRESET  (Features 3 & 4)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _page_crop_preset(self):
+        """Step 4 — Crop Preset selector."""
+        capture_method = self.config_data.get('capture_method', 'sd')
+        video_format   = self.config_data.get('format', 'ntsc')
+        files = self.config_data.get('input_files', [])
+        if not files and 'input_path' in self.config_data:
+            files = [self.config_data['input_path']]
+        num_files = len(files)
+
+        # Default preset: DV → none; SD → bt601
+        if 'crop_preset' not in self.config_data:
+            self.config_data['crop_preset'] = 'none' if capture_method == 'dv' else 'bt601'
+
+        # ── Page title ──────────────────────────────────────────────────────
+        tk.Label(self.page_container, text="Crop Options",
+                 font=('Segoe UI', 22, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+        tk.Label(self.page_container,
+                 text="Choose how VCG crops the edges of your video.",
+                 font=('Segoe UI', 13), fg=Colors.TEXT_SECONDARY,
+                 bg=Colors.BG_MAIN).pack(anchor='w', pady=(2, 16))
+
+        # ── Preset radio buttons ────────────────────────────────────────────
+        if video_format == 'ntsc':
+            opt1_desc = "NTSC: crops 8px left+right → 704×480  (default for SD capture)"
+            opt2_desc = ("NTSC: 8px left+right, 2px top, 4px bottom → 704×474  "
+                         "Removes head-switching noise. SAR adjusted for 4:3 display.")
+            opt4_desc = "720×480 full frame, no crop  (default for DV/MiniDV)"
+        else:
+            opt1_desc = "PAL: crops 8px left+right → 704×576  (default for SD capture)"
+            opt2_desc = ("PAL: 8px left+right, 2px top, 4px bottom → 704×570  "
+                         "Removes head-switching noise. SAR adjusted for 4:3 display.")
+            opt4_desc = "720×576 full frame, no crop  (default for DV/MiniDV)"
+
+        initial_preset = self.config_data['crop_preset']
+        self._crop_var = tk.StringVar(value=initial_preset)
+
+        preset_card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+        preset_card.pack(fill='x')
+
+        ModernRadioButton(preset_card,
+                          "Option 1 — BT.601 Active Picture (recommended for SD capture)",
+                          self._crop_var, 'bt601', opt1_desc).pack(fill='x')
+        ttk.Separator(preset_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(preset_card,
+                          "Option 2 — Full Overscan Clean",
+                          self._crop_var, 'overscan', opt2_desc).pack(fill='x')
+        ttk.Separator(preset_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(preset_card,
+                          "Option 3 — Manual Crop (4:3 constrained, with live preview)",
+                          self._crop_var, 'manual',
+                          "Adjust each edge independently; output resolution auto-calculated.").pack(fill='x')
+        ttk.Separator(preset_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(preset_card,
+                          "Option 4 — No Crop",
+                          self._crop_var, 'none', opt4_desc).pack(fill='x')
+
+        # ── Multi-file batch warning ────────────────────────────────────────
+        if num_files > 1:
+            warn_frame = tk.Frame(self.page_container, bg='#1A1500', padx=14, pady=10)
+            warn_frame.pack(fill='x', pady=(14, 0))
+            tk.Label(warn_frame, text="⚠  Batch mode warning",
+                     font=('Segoe UI', 11, 'bold'),
+                     fg=Colors.WARNING, bg='#1A1500').pack(anchor='w')
+            tk.Label(warn_frame,
+                     text=f"You are processing {num_files} files. Options 2, 3, and 4 apply "
+                          "the same crop to all files. If your tapes have different overscan "
+                          "amounts or head-switching positions, process each file individually "
+                          "to set a custom crop per file.",
+                     font=('Segoe UI', 10), fg='#C0A040', bg='#1A1500',
+                     wraplength=580, justify='left').pack(anchor='w', pady=(4, 0))
+
+        # ── Manual crop controls (shown when Option 3 is selected) ─────────
+        self._manual_crop_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        self._manual_crop_frame.pack(fill='x', pady=(12, 0))
+
+        # ── Preview area (for manual crop, populated on demand) ─────────────
+        self._crop_preview_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        self._crop_preview_frame.pack(fill='x', pady=(8, 0))
+
+        # State for manual crop iteration (Feature 4)
+        if 'per_file_settings' not in self.config_data:
+            self.config_data['per_file_settings'] = {}
+        for fp in files:
+            self.config_data['per_file_settings'].setdefault(fp, {})
+        self._crop_files = files
+        self._crop_file_idx = 0
+
+        def _on_preset_change(*_):
+            preset = self._crop_var.get()
+            self.config_data['crop_preset'] = preset
+            # Clear manual/preview frames
+            for w in self._manual_crop_frame.winfo_children():
+                w.destroy()
+            for w in self._crop_preview_frame.winfo_children():
+                w.destroy()
+            if preset == 'manual':
+                self._build_manual_crop_ui(files, video_format)
+            # For option 1, update crop_left/right in config
+            if preset == 'bt601':
+                self.config_data.update({'crop_left': 8, 'crop_right': 8,
+                                         'crop_top': 0, 'crop_bottom': 0})
+            elif preset == 'overscan':
+                self.config_data.update({'crop_left': 8, 'crop_right': 8,
+                                         'crop_top': 2, 'crop_bottom': 4})
+            elif preset == 'none':
+                self.config_data.update({'crop_left': 0, 'crop_right': 0,
+                                         'crop_top': 0, 'crop_bottom': 0})
+
+        self._crop_var.trace_add('write', _on_preset_change)
+        # Trigger immediately to build any initial state
+        _on_preset_change()
+
+    def _build_manual_crop_ui(self, files, video_format):
+        """Build the manual crop controls + live preview (Feature 4)."""
+        num_files = len(files)
+        parent = self._manual_crop_frame
+
+        if num_files > 1:
+            self._crop_nav_lbl = tk.Label(
+                parent,
+                text=f"File {self._crop_file_idx + 1} of {num_files}: "
+                     f"{os.path.basename(files[self._crop_file_idx])}",
+                font=('Segoe UI', 11, 'bold'), fg=Colors.ACCENT, bg=Colors.BG_MAIN)
+            self._crop_nav_lbl.pack(anchor='w', pady=(0, 8))
+
+        # Get or initialise per-file crop values
+        fp = files[self._crop_file_idx]
+        pf = self.config_data['per_file_settings'][fp]
+        cl = tk.IntVar(value=pf.get('crop_left', 8))
+        cr = tk.IntVar(value=pf.get('crop_right', 8))
+        ct = tk.IntVar(value=pf.get('crop_top', 0))
+        cb = tk.IntVar(value=pf.get('crop_bottom', 0))
+
+        # Resolution / SAR display
+        res_lbl = tk.Label(parent, text="",
+                           font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY,
+                           bg=Colors.BG_MAIN)
+        res_lbl.pack(anchor='w', pady=(0, 8))
+
+        def _update_res(*_):
+            if video_format == 'ntsc':
+                ow = max(0, 720 - cl.get() - cr.get())
+                oh = max(0, 480 - ct.get() - cb.get())
+            else:
+                ow = max(0, 720 - cl.get() - cr.get())
+                oh = max(0, 576 - ct.get() - cb.get())
+            res_lbl.config(text=f"Output size: {ow}×{oh}")
+            # Save to per-file
+            self.config_data['per_file_settings'][fp].update({
+                'crop_left': cl.get(), 'crop_right': cr.get(),
+                'crop_top': ct.get(), 'crop_bottom': cb.get(),
+            })
+            # Also update top-level crop for script generation
+            self.config_data.update({
+                'crop_left': cl.get(), 'crop_right': cr.get(),
+                'crop_top': ct.get(), 'crop_bottom': cb.get(),
+            })
+
+        for var in (cl, cr, ct, cb):
+            var.trace_add('write', _update_res)
+
+        # Spinbox grid for crop values
+        grid = tk.Frame(parent, bg=Colors.BG_MAIN)
+        grid.pack(anchor='w', pady=(0, 8))
+        for col_lbl, var in [("Left:", cl), ("Right:", cr),
+                              ("Top:", ct), ("Bottom:", cb)]:
+            f = tk.Frame(grid, bg=Colors.BG_MAIN)
+            f.pack(side='left', padx=(0, 18))
+            tk.Label(f, text=col_lbl, font=('Segoe UI', 11),
+                     fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(anchor='w')
+            sb = tk.Spinbox(f, from_=0, to=80, textvariable=var, width=5,
+                            font=('Segoe UI', 12),
+                            bg=Colors.BG_CARD, fg=Colors.TEXT_PRIMARY,
+                            buttonbackground=Colors.BG_CARD,
+                            insertbackground=Colors.TEXT_PRIMARY)
+            sb.pack()
+
+        # Trigger initial resolution display
+        _update_res()
+
+        # ── Live preview canvas ─────────────────────────────────────────────
+        prev_lbl = tk.Label(parent, text="⏳ Loading preview frame…",
+                            font=('Segoe UI', 10), fg=Colors.ACCENT,
+                            bg=Colors.BG_MAIN)
+        prev_lbl.pack(anchor='w')
+
+        canvas_frame = tk.Frame(parent, bg=Colors.BG_CARD, padx=6, pady=6)
+        canvas_frame.pack(anchor='w', pady=(4, 0))
+        preview_canvas = tk.Canvas(canvas_frame, width=640, height=360,
+                                   bg=Colors.BG_DARK, highlightthickness=0)
+        preview_canvas.pack()
+        tk.Label(canvas_frame,
+                 text="Green overlay = crop region that will be kept",
+                 font=('Segoe UI', 8), fg=Colors.TEXT_HINT,
+                 bg=Colors.BG_CARD).pack(anchor='w', pady=(4, 0))
+
+        # Navigation for batch per-file preview
+        if num_files > 1:
+            nav_row = tk.Frame(parent, bg=Colors.BG_MAIN)
+            nav_row.pack(anchor='w', pady=(10, 0))
+
+            def _prev_file_crop():
+                if self._crop_file_idx > 0:
+                    self._crop_file_idx -= 1
+                    for w in self._manual_crop_frame.winfo_children():
+                        w.destroy()
+                    self._build_manual_crop_ui(files, video_format)
+
+            def _next_file_crop():
+                if self._crop_file_idx < num_files - 1:
+                    self._crop_file_idx += 1
+                    for w in self._manual_crop_frame.winfo_children():
+                        w.destroy()
+                    self._build_manual_crop_ui(files, video_format)
+
+            if self._crop_file_idx > 0:
+                ModernButton(nav_row, "← Prev File",
+                             _prev_file_crop, width=110).pack(side='left')
+            if self._crop_file_idx < num_files - 1:
+                ModernButton(nav_row, "Next File →",
+                             _next_file_crop, primary=True, width=110).pack(
+                    side='left', padx=(10, 0))
+
+        self._crop_src_img = None
+
+        def _draw_preview():
+            """Overlay the crop rectangle on the preview canvas."""
+            if self._crop_src_img is None or not HAS_PIL:
+                return
+            try:
+                img = self._crop_src_img.copy()
+                w_src, h_src = img.size
+                # Scale to canvas
+                scale_x = 640 / w_src
+                scale_y = 360 / h_src
+                display = img.resize((640, 360), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(display)
+                preview_canvas._vcg_photo = photo
+                preview_canvas.delete('all')
+                preview_canvas.create_image(0, 0, anchor='nw', image=photo)
+                # Crop overlay rectangle
+                x1 = int(cl.get() * scale_x)
+                y1 = int(ct.get() * scale_y)
+                x2 = 640 - int(cr.get() * scale_x)
+                y2 = 360 - int(cb.get() * scale_y)
+                preview_canvas.create_rectangle(x1, y1, x2, y2,
+                                                outline='#00FF00', width=2)
+            except Exception:
+                pass
+
+        def _on_crop_change(*_):
+            _update_res()
+            _draw_preview()
+
+        for var in (cl, cr, ct, cb):
+            var.trace_add('write', _on_crop_change)
+
+        def _load_preview():
+            path = extract_preview_frame(fp)
+            if path:
+                self.temp_images.append(path)
+                try:
+                    img = Image.open(path).convert('RGB')
+                    self._crop_src_img = img
+                    self.after(0, lambda: (prev_lbl.config(text=""),
+                                           _draw_preview()))
+                except Exception as exc:
+                    self.after(0, lambda: prev_lbl.config(text=f"Preview error: {exc}"))
+            else:
+                self.after(0, lambda: prev_lbl.config(text="⚠ Could not extract preview"))
+
+        threading.Thread(target=_load_preview, daemon=True).start()
 
     def _page_source_setup(self):
         """Step 2 — Source Setup: Video Format + Capture Method on one page."""
@@ -4879,6 +5854,40 @@ class RestorationWizard(BaseWindow):
         self.output_var.trace_add('write',
             lambda *_: self.config_data.update({'output_format': self.output_var.get()}))
 
+        # ── Diagnostic Log checkbox (Feature 5) ───────────────────────────────
+        diag_outer = tk.Frame(self._output_select_frame, bg=Colors.BG_CARD,
+                              padx=16, pady=14)
+        diag_outer.pack(fill='x', pady=(16, 0))
+
+        diag_top = tk.Frame(diag_outer, bg=Colors.BG_CARD)
+        diag_top.pack(fill='x')
+        tk.Label(diag_top, text="🔍  Troubleshooting",
+                 font=('Segoe UI', 11, 'bold'),
+                 fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(side='left')
+
+        self._diag_var = tk.BooleanVar(
+            value=self.config_data.get('save_diagnostic_log', False))
+
+        diag_cb = tk.Checkbutton(
+            diag_outer,
+            text="Save diagnostic log for troubleshooting  (saved alongside the output video)",
+            variable=self._diag_var,
+            font=('Segoe UI', 11),
+            fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD,
+            selectcolor=Colors.BG_DARK,
+            activebackground=Colors.BG_CARD,
+            activeforeground=Colors.TEXT_PRIMARY,
+            command=lambda: self.config_data.update(
+                {'save_diagnostic_log': self._diag_var.get()}))
+        diag_cb.pack(anchor='w', pady=(8, 0))
+
+        tk.Label(diag_outer,
+                 text="Logs: VCG version, system info, ffprobe data, detected parameters, "
+                      "VapourSynth script, FFmpeg command, full stdout/stderr, exceptions, "
+                      "and processing timing.  Written incrementally so crash logs are useful.",
+                 font=('Segoe UI', 10), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                 wraplength=580, justify='left').pack(anchor='w', pady=(4, 0))
+
         # ── Start Processing button ────────────────────────────────────────────
         btn_outer = tk.Frame(self._output_select_frame, bg=Colors.BG_MAIN)
         btn_outer.pack(pady=(24, 8))
@@ -5393,21 +6402,27 @@ class RestorationWizard(BaseWindow):
     def _run_batch_processing(self):
         """Process all files in the queue."""
         total_files = len(self.files_to_process)
-        
+        self.completed_log_paths = []
+
         for i, filepath in enumerate(self.files_to_process):
             self.current_file_index = i
             self._update_overall_progress()
             self._update_current_file(filepath)
             self._update_progress(0)
-            
+
             self._log(f"\n{'='*50}")
             self._log(f"Processing file {i+1} of {total_files}: {os.path.basename(filepath)}")
             self._log(f"{'='*50}")
-            
+
             try:
-                output_path = self._process_single_file(filepath)
+                output_path, log_path = self._process_single_file(filepath)
                 self.completed_files.append((filepath, output_path))
-                self._log(f"✓ Complete: {output_path}")
+                if log_path:
+                    self.completed_log_paths.append(log_path)
+                    self._log(f"✓ Complete: {output_path}")
+                    self._log(f"  Log: {log_path}")
+                else:
+                    self._log(f"✓ Complete: {output_path}")
             except Exception as e:
                 self.failed_files.append((filepath, str(e)))
                 self._log(f"❌ Failed: {str(e)}")
@@ -5430,22 +6445,27 @@ class RestorationWizard(BaseWindow):
         self.after(0, self._show_batch_complete)
     
     def _process_single_file(self, filepath):
-        """Process a single file and return the output path."""
+        """Process a single file and return (output_path_str, log_path_or_None)."""
+        import traceback as _traceback
+
         self._log("Generating VapourSynth script...")
         self._update_status("Generating script...")
         self._update_progress(0.1)
-        
-        # Create config for this file
+
+        # ── Build per-file config ──────────────────────────────────────────
+        # Start from global config, then apply any per-file overrides.
         file_config = self.config_data.copy()
         file_config['input_path'] = filepath
-        
+        per_file_overrides = self.config_data.get('per_file_settings', {}).get(filepath, {})
+        file_config.update(per_file_overrides)
+
         # Generate script
         script = generate_vpy_script(file_config)
-        
+
         # Save script with auto-numbering
         input_path = Path(filepath)
         output_args, output_ext = get_ffmpeg_output_args(file_config)
-        
+
         # Find next available number
         counter = 1
         while True:
@@ -5455,17 +6475,72 @@ class RestorationWizard(BaseWindow):
             if not output_path.exists() and not script_path.exists():
                 break
             counter += 1
-        
+
         with open(script_path, 'w', encoding='utf-8') as f:
             f.write(script)
-        
+
         self._log(f"Script saved: {script_path}")
-        
+
+        # ── Diagnostic logger ──────────────────────────────────────────────
+        diag = None
+        diag_log_path = None
+        if file_config.get('save_diagnostic_log'):
+            diag_log_path = str(output_path.parent / (output_path.stem + '_vcg_log.txt'))
+            try:
+                diag = DiagnosticLogger(diag_log_path)
+
+                diag.section(f"VCG Deinterlacer {VERSION_STRING} — Diagnostic Log")
+                diag.kv("Build date", BUILD_DATE)
+                diag.kv("Log start", time.strftime('%Y-%m-%d %H:%M:%S'))
+                diag.kv("Input file", filepath)
+                diag.kv("Output file", str(output_path))
+                diag.kv("Script file", str(script_path))
+
+                diag.section("System Information")
+                sys_info = _diag_collect_system_info()
+                for _k, _v in sys_info.items():
+                    diag.kv(_k, _v)
+
+                diag.section("FFprobe Analysis (JSON)")
+                try:
+                    _probe_cmd = [
+                        FFPROBE_PATH, '-v', 'quiet',
+                        '-print_format', 'json',
+                        '-show_format', '-show_streams',
+                        filepath
+                    ]
+                    _probe_res = run_hidden(_probe_cmd, timeout=30)
+                    diag.raw(_probe_res.stdout or '(no output)')
+                except Exception as _pe:
+                    diag.exception(_pe)
+
+                diag.section("Detected Parameters / Settings")
+                _diag_keys = [
+                    'video_format', 'field_order', 'capture_method', 'crop_preset',
+                    'yc_delay', 'ivtc_mode', 'noise_level', 'chroma_bleeding_level',
+                    'color_cast_correction', 'levels_correction', 'audio_mode',
+                    'output_format', 'par_correction', 'mix_audio', 'save_diagnostic_log',
+                ]
+                for _k in _diag_keys:
+                    if _k in file_config:
+                        diag.kv(_k, str(file_config[_k]))
+                # Per-file overrides (if any)
+                if per_file_overrides:
+                    diag.kv("per_file_overrides", str(per_file_overrides))
+
+                diag.section("VapourSynth Script")
+                diag.raw(script)
+
+            except Exception as _de:
+                self._log(f"  Warning: could not start diagnostic logger: {_de}")
+                diag = None
+                diag_log_path = None
+
         # Step 1: Extract audio to clean WAV first (like Hybrid does)
         # This strips container metadata that can cause sync issues
         self._update_status("Extracting audio...")
         self._update_progress(0.1)
-        
+
         # First, detect audio properties
         audio_channels = 0
         audio_sample_rate = 48000
@@ -5492,15 +6567,15 @@ class RestorationWizard(BaseWindow):
                             audio_channels = num
         except:
             pass
-        
+
         temp_audio = str(input_path.parent / f'temp_audio_{os.getpid()}.wav')
-        
+
         self._log("Extracting audio to WAV...")
         self._log(f"  Detected: {audio_channels} channels @ {audio_sample_rate}Hz")
-        
+
         # Check if user wants to mix audio channels
         mix_audio = self.config_data.get('mix_audio', False)
-        
+
         if mix_audio:
             # Mix both channels together - useful when audio is only on one channel
             # pan=stereo|c0=c0+c1|c1=c0+c1 mixes L+R into both channels
@@ -5530,9 +6605,13 @@ class RestorationWizard(BaseWindow):
                 temp_audio
             ]
             self._log("  Preserving original audio channels")
-        
+
+        if diag:
+            diag.section("Step 1: Audio Extraction")
+            diag.cmd(audio_extract_cmd)
+
         result = run_hidden(audio_extract_cmd, timeout=None)
-        
+
         # If pan filter failed, retry with simple conversion
         if result.returncode != 0:
             self._log("  Retrying audio extraction with simple stereo conversion...")
@@ -5547,34 +6626,53 @@ class RestorationWizard(BaseWindow):
                 '-f', 'wav',
                 temp_audio
             ]
+            if diag:
+                diag.kv("audio-extract-retry", "pan filter failed, retrying with simple stereo")
+                diag.cmd(audio_extract_cmd)
             result = run_hidden(audio_extract_cmd, timeout=None)
-        
+
         has_audio = result.returncode == 0 and os.path.exists(temp_audio) and os.path.getsize(temp_audio) > 1000
         if not has_audio:
             self._log("  No audio stream found or extraction failed, continuing without audio")
+            if diag:
+                diag.captured("audio-extract", result.stdout, result.stderr)
+                diag.kv("audio-extract", "FAILED or no audio stream — continuing without audio")
             try:
                 os.remove(temp_audio)
             except:
                 pass
         else:
             self._log("  Audio extracted successfully")
-        
+            if diag:
+                diag.captured("audio-extract", result.stdout, result.stderr)
+                diag.kv("audio-extract", "SUCCESS")
+
         self._update_status("Running VapourSynth...")
         self._update_progress(0.2)
-        
+
         # Step 2: Run vspipe to Y4M
         temp_y4m = str(input_path.parent / f'temp_{os.getpid()}.y4m')
-        
+
         self._log("Running vspipe...")
         vspipe_cmd = [VSPIPE_PATH, '-c', 'y4m', str(script_path), temp_y4m]
         # Pass portable Python/plugin environment when using bundled deps
         _vs_env = get_vspipe_env()
+
+        if diag:
+            diag.section("Step 2: VapourSynth Processing")
+            diag.cmd(vspipe_cmd)
+            diag.timing("vspipe start")
+
         result = run_hidden(vspipe_cmd, timeout=None,
                             **({'env': _vs_env} if _vs_env else {}))
-        
+
         if result.returncode != 0:
             err_text = (result.stderr or result.stdout or "").strip()
             self._log(f"vspipe error:\n{err_text}")
+            if diag:
+                diag.captured("vspipe", result.stdout, result.stderr)
+                diag.kv("vspipe", f"FAILED (returncode={result.returncode})")
+                diag.close(success=False)
             # Show the actual vspipe error so the user can report it
             def _show_vs_err():
                 import tkinter.messagebox as _mb
@@ -5592,48 +6690,66 @@ class RestorationWizard(BaseWindow):
             except Exception:
                 pass
             raise Exception("vspipe failed")
-        
+
+        if diag:
+            diag.captured("vspipe", result.stdout, result.stderr)
+            diag.kv("vspipe", "SUCCESS")
+            diag.timing("vspipe end")
+
         self._update_progress(0.6)
         self._update_status("Encoding video...")
-        
+
         # Step 3: FFmpeg encode video
         self._log("Running FFmpeg...")
         ffmpeg_cmd = [FFMPEG_PATH, '-i', temp_y4m]
         ffmpeg_cmd.extend(output_args)
         ffmpeg_cmd.extend(['-y', str(output_path)])
-        
+
+        if diag:
+            diag.section("Step 3: FFmpeg Encode")
+            diag.cmd(ffmpeg_cmd)
+
         result = run_hidden(ffmpeg_cmd, timeout=None)
-        
+
         # Clean up temp Y4M file
         try:
             os.remove(temp_y4m)
         except:
             pass
-        
+
         if result.returncode != 0:
             self._log(f"FFmpeg error: {result.stderr}")
+            if diag:
+                diag.captured("ffmpeg-encode", result.stdout, result.stderr)
+                diag.kv("ffmpeg-encode", f"FAILED (returncode={result.returncode})")
+                diag.close(success=False)
             # Clean up temp audio if it exists
             try:
                 os.remove(temp_audio)
             except:
                 pass
             raise Exception("FFmpeg failed")
-        
+
+        if diag:
+            diag.captured("ffmpeg-encode", result.stdout, result.stderr)
+            diag.kv("ffmpeg-encode", "SUCCESS")
+            diag.timing("ffmpeg-encode end")
+
         self._update_progress(0.9)
         self._update_status("Muxing audio...")
-        
+
         # Step 4: Mux video with clean extracted audio
         if has_audio:
             temp_output = str(output_path) + '.temp' + output_ext
             os.rename(output_path, temp_output)
-            
+
             # Determine audio codec based on output format
             if output_ext == '.mp4':
                 audio_args = ['-c:a', 'aac', '-b:a', '192k']
             else:
                 # For MOV/MKV, copy PCM audio directly
                 audio_args = ['-c:a', 'pcm_s16le']
-            
+
             # Set explicit frame rate for proper sync (like Hybrid does)
             mux_cmd = [
                 FFMPEG_PATH,
@@ -5647,10 +6763,20 @@ class RestorationWizard(BaseWindow):
             ]
             mux_cmd.extend(audio_args)
             mux_cmd.extend(['-r', '60000/1001', str(output_path)])
-            
+
             self._log("Muxing video with extracted audio...")
-            run_hidden(mux_cmd, timeout=None)
-            
+            if diag:
+                diag.section("Step 4: Audio Mux")
+                diag.cmd(mux_cmd)
+
+            mux_result = run_hidden(mux_cmd, timeout=None)
+
+            if diag:
+                diag.captured("mux", mux_result.stdout, mux_result.stderr)
+                diag.kv("mux", "SUCCESS" if mux_result.returncode == 0
+                        else f"FAILED (returncode={mux_result.returncode})")
+                diag.timing("mux end")
+
             # Clean up temp files
             try:
                 os.remove(temp_output)
@@ -5662,7 +6788,10 @@ class RestorationWizard(BaseWindow):
                 pass
         else:
             self._log("No audio to mux, video-only output")
-        
+            if diag:
+                diag.section("Step 4: Audio Mux")
+                diag.kv("mux", "SKIPPED — no audio stream")
+
         self._update_progress(1.0)
 
         # Cleanup: delete .vpy script and any temp files created during this run
@@ -5674,7 +6803,14 @@ class RestorationWizard(BaseWindow):
             except Exception as e:
                 self._log(f"  Note: could not delete {os.path.basename(str(cleanup_path))}: {e}")
 
-        return str(output_path)
+        if diag:
+            diag.section("Output")
+            diag.kv("output_file", str(output_path))
+            diag.kv("output_size", f"{os.path.getsize(str(output_path)) // 1024} KB"
+                    if os.path.exists(str(output_path)) else "unknown")
+            diag.close(success=True)
+
+        return str(output_path), diag_log_path
 
     def _show_batch_complete(self):
         """Show completion UI for batch processing."""
@@ -5690,19 +6826,40 @@ class RestorationWizard(BaseWindow):
         if self.completed_files:
             # Open folder button (opens folder of first completed file)
             first_output = self.completed_files[0][1]
-            ModernButton(btn_frame, "Open Folder", 
+            ModernButton(btn_frame, "Open Folder",
                         lambda: os.startfile(os.path.dirname(first_output)),
                         width=120).pack(side='left', padx=(0, 10))
-            
+
             # Play last video
             if len(self.completed_files) == 1:
                 ModernButton(btn_frame, "Play Video",
                             lambda: os.startfile(self.completed_files[0][1]),
                             primary=True, width=120).pack(side='left', padx=(0, 10))
-        
+
         ModernButton(btn_frame, "Process More Files",
                     self._reset_wizard,
                     width=140).pack(side='left')
+
+        # Show diagnostic log paths if any were created
+        log_paths = getattr(self, 'completed_log_paths', [])
+        if log_paths:
+            log_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=15, pady=10)
+            log_card.pack(fill='x', pady=(10, 0))
+            tk.Label(log_card,
+                     text="Diagnostic log saved:",
+                     font=('Segoe UI', 10, 'bold'),
+                     fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w')
+            for _lp in log_paths:
+                _lp_copy = _lp
+                row = tk.Frame(log_card, bg=Colors.BG_CARD)
+                row.pack(fill='x', pady=(2, 0))
+                tk.Label(row,
+                         text=os.path.basename(_lp_copy),
+                         font=('Segoe UI', 10),
+                         fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left')
+                ModernButton(row, "Open",
+                             lambda p=_lp_copy: os.startfile(p),
+                             width=60).pack(side='left', padx=(10, 0))
         
         # Show summary if multiple files
         if len(self.files_to_process) > 1:
@@ -5907,12 +7064,14 @@ class RestorationWizard(BaseWindow):
         self.config_data = {
             'crop_left': 8,
             'crop_right': 8,
-            'par_correction': True
+            'par_correction': True,
+            'per_file_settings': {},
         }
         # Clear batch processing state
         self.files_to_process = []
         self.completed_files = []
         self.failed_files = []
+        self.completed_log_paths = []
         self.current_file_index = 0
         # Clear temp images
         for path in self.temp_images:
