@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "Beta-03"
-BUILD_DATE = "2026-04-11"
+BUILD_DATE = "2026-04-11b"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -235,19 +235,32 @@ def get_vspipe_env():
       - python3XX.zip   (Python stdlib — encodings, etc.)
       - python3XX._pth  (tells Python where to find stdlib + site-packages)
       - site-packages\\  (vapoursynth.pyd, havsfunc.py, ...)
-      - plugins\\        (lsmas.dll, libmvtools.dll, fmtconv.dll)
+      - plugins64\\ or plugins\\  (lsmas.dll, libmvtools.dll, fmtconv.dll)
+      - portable.vs     (marker that tells VSScript to use portable Python mode)
 
     The ._pth file handles module search paths.  We must NOT set PYTHONHOME
     or PYTHONPATH — those conflict with the ._pth mechanism and can cause
     "Failed to import encodings" when the embedded Python starts up.
 
     We only need to:
+      - Ensure portable.vs marker file is present (VSScript portable mode)
       - Put VS_DEPS_DIR first on PATH (so DLLs are found there)
       - Set VSPluginPath for VapourSynth plugin auto-loading
       - REMOVE any inherited PYTHONHOME / PYTHONPATH from Nuitka's runtime
     """
     if not os.path.isdir(VS_DEPS_DIR):
         return None   # not in portable mode, use system environment
+
+    # ── Ensure portable.vs marker exists.
+    #    VSScript.dll checks for this file next to itself to enable portable mode.
+    #    Without it, VSScript tries to find Python via the Windows registry,
+    #    which fails (or finds the wrong version) when system Python differs.
+    portable_marker = os.path.join(VS_DEPS_DIR, 'portable.vs')
+    if not os.path.exists(portable_marker):
+        try:
+            open(portable_marker, 'w').close()
+        except Exception:
+            pass  # non-fatal; continue and hope VSScript finds Python anyway
 
     env = os.environ.copy()
 
@@ -260,19 +273,99 @@ def get_vspipe_env():
     for _k in ('__PYVENV_LAUNCHER__', 'VIRTUAL_ENV', 'VIRTUAL_ENV_PROMPT'):
         env.pop(_k, None)
 
-    # ── Set VapourSynth plugin path (hint — may be ignored by VS R73 portable) ──
-    env['VSPluginPath'] = os.path.join(VS_DEPS_DIR, 'plugins64')
-
-    # ── Prepend VS_DEPS_DIR and plugins64 to PATH.
-    #    VS_DEPS_DIR  → Windows finds python3XX.dll, VapourSynth.dll, VSScript.dll
-    #    plugins64    → Windows finds libfftw3-3.dll and other plugin sub-deps
-    #                   when core.std.LoadPlugin() loads DFTTest, fft3dfilter, etc.
+    # ── Find the plugins directory (build script may use plugins64\ or plugins\)
     plugins64_dir = os.path.join(VS_DEPS_DIR, 'plugins64')
+    plugins_dir   = os.path.join(VS_DEPS_DIR, 'plugins')
+    if os.path.isdir(plugins64_dir):
+        plugin_dir = plugins64_dir
+    elif os.path.isdir(plugins_dir):
+        plugin_dir = plugins_dir
+    else:
+        plugin_dir = plugins64_dir  # default even if missing
+
+    # ── Set VapourSynth plugin path ──────────────────────────────────────────
+    env['VSPluginPath'] = plugin_dir
+
+    # ── Prepend VS_DEPS_DIR and plugin_dir to PATH.
+    #    VS_DEPS_DIR  → Windows finds python3XX.dll, VapourSynth.dll, VSScript.dll
+    #    plugin_dir   → Windows finds libfftw3-3.dll and other plugin sub-deps
+    #                   when core.std.LoadPlugin() loads DFTTest, fft3dfilter, etc.
     env['PATH'] = (VS_DEPS_DIR + os.pathsep
-                   + plugins64_dir + os.pathsep
+                   + plugin_dir + os.pathsep
                    + env.get('PATH', ''))
 
     return env
+
+
+def _collect_vs_deps_diagnostic():
+    """Return a multi-line string listing key files in VS_DEPS_DIR for diagnostics."""
+    lines = []
+    lines.append(f"VS_DEPS_DIR : {VS_DEPS_DIR}")
+    lines.append(f"  exists    : {os.path.isdir(VS_DEPS_DIR)}")
+    if not os.path.isdir(VS_DEPS_DIR):
+        return '\n'.join(lines)
+
+    # List top-level files
+    try:
+        top = sorted(os.listdir(VS_DEPS_DIR))
+    except Exception as e:
+        lines.append(f"  listdir error: {e}")
+        return '\n'.join(lines)
+
+    lines.append(f"  top-level files ({len(top)}):")
+    for name in top:
+        full = os.path.join(VS_DEPS_DIR, name)
+        if os.path.isfile(full):
+            size = os.path.getsize(full)
+            lines.append(f"    {name}  ({size:,} bytes)")
+        else:
+            lines.append(f"    {name}/  [dir]")
+
+    # Check specific key files
+    key_files = [
+        'vspipe.exe', 'VSScript.dll', 'VapourSynth.dll',
+        'portable.vs',
+    ]
+    # Python DLL and stdlib — detect by pattern
+    try:
+        for f in top:
+            if f.lower().startswith('python3') and (f.lower().endswith('.dll')
+                    or f.lower().endswith('.zip') or f.lower().endswith('._pth')):
+                key_files.append(f)
+    except Exception:
+        pass
+
+    lines.append("  key file check:")
+    for kf in key_files:
+        fp = os.path.join(VS_DEPS_DIR, kf)
+        exists = os.path.exists(fp)
+        lines.append(f"    {'OK  ' if exists else 'MISS'} {kf}")
+
+    # List site-packages
+    sp = os.path.join(VS_DEPS_DIR, 'site-packages')
+    if os.path.isdir(sp):
+        try:
+            sp_files = sorted(os.listdir(sp))
+            lines.append(f"  site-packages ({len(sp_files)} items): " + ', '.join(sp_files[:30]))
+        except Exception as e:
+            lines.append(f"  site-packages listdir error: {e}")
+    else:
+        lines.append("  site-packages/: MISSING")
+
+    # List plugins directory
+    for pdir in ('plugins64', 'plugins'):
+        pd = os.path.join(VS_DEPS_DIR, pdir)
+        if os.path.isdir(pd):
+            try:
+                pd_files = sorted(os.listdir(pd))
+                lines.append(f"  {pdir}/ ({len(pd_files)} items): " + ', '.join(pd_files[:20]))
+            except Exception as e:
+                lines.append(f"  {pdir}/ listdir error: {e}")
+            break
+    else:
+        lines.append("  plugins64/ and plugins/: BOTH MISSING")
+
+    return '\n'.join(lines)
 
 
 def write_paths_json():
@@ -1264,12 +1357,17 @@ def generate_vpy_script(config):
     lines.append('')
 
     # ── Explicit plugin loading (portable mode) ──────────────────────────────
-    # VapourSynth R73 portable autoloading is unreliable — the plugins64 dir
+    # VapourSynth R73 portable autoloading is unreliable — the plugins dir
     # is sometimes not found via the portable.vs mechanism.  Load every DLL
     # explicitly so we never depend on autoloading.  Failures are silently
     # ignored (already-loaded plugins, non-VS DLLs like libfftw3-3.dll, etc.).
-    plugins64_dir = os.path.join(VS_DEPS_DIR, 'plugins64')
-    if os.path.isdir(plugins64_dir):
+    # Support both plugins64\ and plugins\ directory names.
+    _plugin_dir_candidates = [
+        os.path.join(VS_DEPS_DIR, 'plugins64'),
+        os.path.join(VS_DEPS_DIR, 'plugins'),
+    ]
+    plugins64_dir = next((d for d in _plugin_dir_candidates if os.path.isdir(d)), None)
+    if plugins64_dir:
         # Use forward slashes — safe on Windows, avoids escape issues in vpy
         p64 = plugins64_dir.replace('\\', '/')
         lines.append('# Explicitly load all plugins from portable _deps (bypass autoloading)')
@@ -6660,24 +6758,35 @@ class RestorationWizard(BaseWindow):
         vspipe_cmd = [VSPIPE_PATH, '-c', 'y4m', str(script_path), temp_y4m]
         # Pass portable Python/plugin environment when using bundled deps
         _vs_env = get_vspipe_env()
+        # cwd=VS_DEPS_DIR ensures Windows DLL search starts from the VS folder,
+        # which is especially important for side-by-side DLL loading on Win10+.
+        _vs_cwd = VS_DEPS_DIR if (os.path.isdir(VS_DEPS_DIR) and _vs_env) else None
 
         if diag:
             diag.section("Step 2: VapourSynth Processing")
+            diag.kv("VSPIPE_PATH", VSPIPE_PATH)
+            diag.kv("vspipe exists", str(os.path.exists(VSPIPE_PATH)))
+            diag.kv("vspipe cwd", str(_vs_cwd))
+            _deps_info = _collect_vs_deps_diagnostic()
+            diag.raw(_deps_info)
             diag.cmd(vspipe_cmd)
             diag.timing("vspipe start")
 
         result = run_hidden(vspipe_cmd, timeout=None,
-                            **({'env': _vs_env} if _vs_env else {}))
+                            **({'env': _vs_env} if _vs_env else {}),
+                            **({'cwd': _vs_cwd} if _vs_cwd else {}))
 
-        # If portable Python env caused VSScript init failure, retry without
-        # the custom environment so the system Python/VapourSynth can be tried.
+        # If portable Python env caused VSScript init failure, retry with
+        # cwd still set but without the custom environment (uses system Python).
         if (result.returncode != 0 and _vs_env
                 and 'Failed to initialize VSScript' in (result.stderr or '')):
-            self._log("  Portable Python init failed — retrying with system environment...")
+            self._log("  Portable env init failed — retrying with system environment...")
             if diag:
+                diag.captured("vspipe-attempt-1", result.stdout, result.stderr)
                 diag.kv("vspipe-retry", "init failed with portable env, retrying with system env")
                 diag.cmd(vspipe_cmd)
-            result = run_hidden(vspipe_cmd, timeout=None)
+            result = run_hidden(vspipe_cmd, timeout=None,
+                                **({'cwd': _vs_cwd} if _vs_cwd else {}))
 
         if result.returncode != 0:
             err_text = (result.stderr or result.stdout or "").strip()
