@@ -222,6 +222,70 @@ def _find_pip_vspipe():
         pass
     return None
 
+
+def _find_pip_vapoursynth_dlls():
+    """Return a list of (src_path, dll_name) for VSScript/VapourSynth DLLs
+    found in the pip-installed vapoursynth package.
+
+    The pip-installed vapoursynth==73 for Python 3.14 contains VSScript.dll
+    and VapourSynth.dll compiled against Python 3.14.  Copying these to
+    VS_DEPS_DIR lets the bundled vspipe.exe (R73) use Python 3.14.
+    """
+    results = []
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec('vapoursynth')
+        if not spec or not spec.origin:
+            return results
+
+        # Build candidate search directories
+        pkg_dir = os.path.dirname(spec.origin)
+        site_dir = os.path.dirname(pkg_dir)  # one level up = site-packages root
+        search_dirs = [pkg_dir, site_dir]
+        if spec.submodule_search_locations:
+            search_dirs.extend(list(spec.submodule_search_locations))
+
+        target_names = {'vsscript.dll', 'vapoursynth.dll'}
+        seen = set()
+        for d in search_dirs:
+            if not os.path.isdir(d):
+                continue
+            try:
+                for fname in os.listdir(d):
+                    if fname.lower() in target_names and fname.lower() not in seen:
+                        results.append((os.path.join(d, fname), fname))
+                        seen.add(fname.lower())
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return results
+
+
+def _try_upgrade_bundled_vsscript():
+    """Copy Python-3.14-compatible DLLs from pip package to _deps/vs/.
+
+    The bundled R73 vsscript.dll was compiled to find Python 3.8-3.12 only.
+    The pip-installed vapoursynth==73 for Python 3.14 has a vsscript.dll
+    that was compiled for Python 3.14.  Replacing the bundled DLL fixes the
+    'Failed to initialize VSScript' error without needing a new deps package.
+
+    Returns True if at least one DLL was copied successfully.
+    """
+    if not os.path.isdir(VS_DEPS_DIR):
+        return False
+    dlls = _find_pip_vapoursynth_dlls()
+    copied = 0
+    for src, name in dlls:
+        dst = os.path.join(VS_DEPS_DIR, name)
+        try:
+            shutil.copy2(src, dst)
+            copied += 1
+        except Exception:
+            pass
+    return copied > 0
+
+
 _PIP_VSPIPE = _find_pip_vspipe()
 
 VSPIPE_PATH  = (os.path.join(VS_DEPS_DIR, 'vspipe.exe')
@@ -6825,16 +6889,37 @@ class RestorationWizard(BaseWindow):
             result = run_hidden(vspipe_cmd, timeout=None,
                                 **({'cwd': _vs_cwd} if _vs_cwd else {}))
 
-        # Retry 2: pip-installed vspipe (VapourSynth R74+ supports Python 3.14).
+        # Retry 2: pip-installed vspipe.exe (VapourSynth R74+, Python 3.14 native).
         _init_failed2 = ('Failed to initialize VSScript' in (result.stderr or ''))
         if result.returncode != 0 and _init_failed2 and _PIP_VSPIPE and _PIP_VSPIPE != VSPIPE_PATH:
-            self._log(f"  Trying pip-installed VapourSynth: {_PIP_VSPIPE}")
+            self._log(f"  Trying pip-installed vspipe: {_PIP_VSPIPE}")
             pip_cmd = [_PIP_VSPIPE, '-c', 'y4m', str(script_path), temp_y4m]
             if diag:
                 diag.captured("vspipe-attempt-2", result.stdout, result.stderr)
                 diag.kv("vspipe-retry-2", f"trying pip vspipe at {_PIP_VSPIPE}")
                 diag.cmd(pip_cmd)
             result = run_hidden(pip_cmd, timeout=None)
+
+        # Retry 3: upgrade bundled vsscript.dll from pip package, then retry bundled vspipe.
+        # The pip-installed vapoursynth==73 for Python 3.14 ships vsscript.dll compiled for
+        # Python 3.14.  Copying it into _deps\vs\ fixes the init failure permanently.
+        _init_failed3 = ('Failed to initialize VSScript' in (result.stderr or ''))
+        if result.returncode != 0 and _init_failed3:
+            self._log("  Attempting to upgrade bundled vsscript.dll from pip package...")
+            if diag:
+                diag.captured("vspipe-attempt-3", result.stdout, result.stderr)
+            _upgraded = _try_upgrade_bundled_vsscript()
+            if _upgraded:
+                self._log("  Upgrade succeeded — retrying bundled vspipe...")
+                if diag:
+                    dlls_info = ', '.join(n for _, n in _find_pip_vapoursynth_dlls())
+                    diag.kv("vspipe-retry-3", f"copied pip DLLs to _deps/vs/ ({dlls_info}), retrying")
+                    diag.cmd(vspipe_cmd)
+                result = run_hidden(vspipe_cmd, timeout=None,
+                                    **({'env': _vs_env} if _vs_env else {}),
+                                    **({'cwd': _vs_cwd} if _vs_cwd else {}))
+            else:
+                self._log("  Could not find pip vsscript.dll to upgrade.")
 
         if result.returncode != 0:
             err_text = (result.stderr or result.stdout or "").strip()
