@@ -2,7 +2,7 @@
 ; VCG Deinterlacer - Inno Setup Installer Script
 ; ============================================================
 ;
-; Beta-01
+; Beta-03
 ; Automatically downloads and installs FFmpeg and VapourSynth
 ; (plus required VS plugins) if not already present.
 ;
@@ -17,11 +17,11 @@
 ; ============================================================
 
 #define MyAppName        "VCG Deinterlacer"
-#define MyAppVersion     "Beta-01"
-#define MyAppVersionFull "Beta-01"
+#define MyAppVersion     "Beta-03"
+#define MyAppVersionFull "Beta-03"
 #define MyAppPublisher   "VideoCaptureGuide"
 #define MyAppURL         "https://www.youtube.com/@VideoCaptureGuide"
-#define MyAppExeName     "VCG_Deinterlacer.exe"
+#define MyAppExeName     "VCG_Deinterlacer_Beta-03.exe"
 #define MyAppCopyright   "Copyright (c) 2026 VideoCaptureGuide"
 
 [Setup]
@@ -74,7 +74,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; Main executable
-Source: "dist\VCG_Deinterlacer.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\VCG_Deinterlacer_Beta-03.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 ; App assets
 Source: "logo.png";     DestDir: "{app}"; Flags: ignoreversion

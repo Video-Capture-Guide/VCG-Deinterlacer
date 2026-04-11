@@ -3,8 +3,8 @@
 # VCG DEINTERLACER
 # ============================================================
 #
-# Version:    Beta-02b
-# Build Date: 2026-04-05
+# Version:    Beta-03
+# Build Date: 2026-04-10
 # Author:     VideoCaptureGuide
 # Website:    https://www.youtube.com/@VideoCaptureGuide
 #
