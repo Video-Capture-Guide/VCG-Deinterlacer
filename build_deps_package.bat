@@ -4,13 +4,22 @@ REM ============================================================
 REM  VCG Deinterlacer — Portable Deps Package Builder
 REM ============================================================
 REM
-REM  Run this ONCE on your dev machine (where VapourSynth R73
-REM  and Python are already installed) to produce:
+REM  PYTHON VERSION REQUIREMENT:
+REM    VapourSynth R74+ requires Python 3.12 or later.
+REM    R73 (legacy) only supports Python 3.8-3.12.
 REM
-REM    vcg-deps-v1.zip   (~50-80 MB)
+REM    If you have Python 3.14:
+REM      1. Run:  pip install vapoursynth
+REM      2. Then run this script — it will detect the pip-installed
+REM         VapourSynth R74 automatically.
 REM
-REM  Then upload vcg-deps-v1.zip as a GitHub Release asset at:
+REM  Run this ONCE on your dev machine to produce:
+REM
+REM    vcg-deps-v7.zip   (~50-80 MB)
+REM
+REM  Then upload vcg-deps-v7.zip as a GitHub Release asset at:
 REM    https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
+REM    Tag: v7    Asset filename: vcg-deps-v7.zip
 REM
 REM  The app will download this single file on first launch
 REM  and extract it to  _deps\  next to the EXE.
@@ -19,14 +28,14 @@ REM ============================================================
 
 echo.
 echo ============================================================
-echo  VCG Deinterlacer - Portable Deps Builder
+echo  VCG Deinterlacer - Portable Deps Builder (v7)
 echo ============================================================
 echo.
 
 REM ── Working directories ───────────────────────────────────────
 set SCRIPT_DIR=%~dp0
 set BUILD_DIR=%SCRIPT_DIR%deps_build
-set OUT_DIR=%BUILD_DIR%\vcg-deps-v6
+set OUT_DIR=%BUILD_DIR%\vcg-deps-v7
 set VS_OUT=%OUT_DIR%\vs
 set FF_OUT=%OUT_DIR%\ffmpeg
 
@@ -41,11 +50,28 @@ mkdir "%VS_OUT%\plugins64"
 mkdir "%VS_OUT%\site-packages"
 mkdir "%FF_OUT%"
 
-REM ── Step 1: Locate VapourSynth R73 installation ──────────────
+REM ── Step 1: Locate VapourSynth installation ───────────────────
+REM  Supports both R73 (traditional installer) and R74+ (pip install).
 echo.
 echo [1/7] Locating VapourSynth installation...
 
 set VS_DIR=
+set VS_MODE=installer
+set PIP_VSPIPE=
+
+REM ── First: check for pip-installed VapourSynth R74+ ──────────
+REM    R74 supports Python 3.12-3.14+ and installs via pip.
+REM    vspipe.exe lands inside the vapoursynth package directory.
+for /f "tokens=*" %%P in ('python -c "import vapoursynth, os; print(os.path.dirname(vapoursynth.__file__))" 2^>nul') do (
+    if exist "%%P\vspipe.exe" (
+        set PIP_VSPIPE=%%P\vspipe.exe
+        set PIP_VS_PKG=%%P
+        echo   Found pip-installed VapourSynth at: %%P
+        goto :found_vs_pip
+    )
+)
+
+REM ── Fallback: traditional R73 installer ──────────────────────
 for %%P in (
     "%LOCALAPPDATA%\Programs\VapourSynth"
     "%PROGRAMFILES%\VapourSynth"
@@ -56,14 +82,28 @@ for %%P in (
         goto :found_vs
     )
 )
-echo ERROR: VapourSynth not found.  Install R73 from vapoursynth.com first.
+
+echo.
+echo ERROR: VapourSynth not found.
+echo.
+echo To install VapourSynth R74 (supports Python 3.12-3.14+):
+echo     pip install vapoursynth
+echo.
+echo Then re-run this script.
 pause
 exit /b 1
 
-:found_vs
-echo   Found VS at: %VS_DIR%
+:found_vs_pip
+echo   Mode: pip-installed VapourSynth (R74+)
+set VS_MODE=pip
+goto :locate_python
 
-REM ── Step 2: Locate Python (must match what VS uses) ──────────
+:found_vs
+echo   Mode: installer VapourSynth at %VS_DIR%
+set VS_MODE=installer
+
+:locate_python
+REM ── Step 2: Locate Python ────────────────────────────────────
 echo.
 echo [2/7] Locating Python installation...
 
@@ -86,7 +126,7 @@ for /f "tokens=*" %%P in ('where python 2^>nul') do (
     set PYTHON_EXE=%%P
     goto :found_python_direct
 )
-echo ERROR: Python not found.  Install Python 3.8-3.12 first.
+echo ERROR: Python not found.  Install Python 3.12+ first.
 pause
 exit /b 1
 
@@ -98,6 +138,22 @@ set PYTHON_VER=%PY_MAJOR%%PY_MINOR%
 :found_python
 echo   Found Python %PY_FULL% at: %PYTHON_EXE%
 echo   Python DLL version number: %PYTHON_VER%
+
+REM ── Warn if Python version is incompatible with installer VS ─
+if "%VS_MODE%"=="installer" (
+    if %PY_MINOR% GTR 12 (
+        echo.
+        echo   WARNING: Python %PY_FULL% detected with installer VapourSynth.
+        echo   VapourSynth R73 only supports Python 3.8-3.12.
+        echo   The portable bundle may not work with Python 3.13+.
+        echo.
+        echo   RECOMMENDED FIX: Run  pip install vapoursynth  then re-run this script.
+        echo   This will use VapourSynth R74+ which supports Python 3.12-3.14+.
+        echo.
+        echo   Press Ctrl+C to cancel, or any key to continue anyway...
+        pause
+    )
+)
 
 REM Find python DLL — derive everything from the python.exe path (no nested-quote issues)
 REM Standard layout: python.exe lives in the prefix dir; site-packages is Lib\site-packages
@@ -123,26 +179,47 @@ REM ── Step 3: Copy VapourSynth core files ───────────
 echo.
 echo [3/7] Copying VapourSynth core files...
 
-copy "%VS_DIR%\core\vspipe.exe"         "%VS_OUT%\" || goto :err
-copy "%VS_DIR%\core\VapourSynth.dll"    "%VS_OUT%\" 2>nul
-copy "%VS_DIR%\core\VSScript.dll"       "%VS_OUT%\" 2>nul
-copy "%VS_DIR%\core\vapoursynth.pyd"    "%VS_OUT%\" 2>nul
+if "%VS_MODE%"=="pip" (
+    REM ── R74 pip-installed: copy from the vapoursynth package directory ──
+    echo   Using pip-installed VapourSynth at: %PIP_VS_PKG%
 
-REM Some VS versions put vapoursynth.pyd in Python site-packages
-if exist "%PY_SITE%\vapoursynth.pyd" (
-    copy "%PY_SITE%\vapoursynth.pyd" "%VS_OUT%\site-packages\"
-    echo   Copied vapoursynth.pyd from site-packages
+    copy "%PIP_VSPIPE%"                          "%VS_OUT%\" || goto :err
+    copy "%PIP_VS_PKG%\vapoursynth.pyd"          "%VS_OUT%\site-packages\" 2>nul
+    copy "%PIP_VS_PKG%\VapourSynth.dll"          "%VS_OUT%\" 2>nul
+    copy "%PIP_VS_PKG%\VSScript.dll"             "%VS_OUT%\" 2>nul
+    copy "%PIP_VS_PKG%\vsscript.dll"             "%VS_OUT%\" 2>nul
+    REM R74 may put DLLs directly in the package dir — copy all of them
+    for %%F in ("%PIP_VS_PKG%\*.dll") do copy "%%F" "%VS_OUT%\" 2>nul
+    REM Also copy DLLs to site-packages so vapoursynth.pyd can find them
+    copy "%PIP_VS_PKG%\VapourSynth.dll"          "%VS_OUT%\site-packages\" 2>nul
+    copy "%PIP_VS_PKG%\VSScript.dll"             "%VS_OUT%\site-packages\" 2>nul
+    copy "%PIP_VS_PKG%\vsscript.dll"             "%VS_OUT%\site-packages\" 2>nul
+
+    echo   Copied pip VapourSynth files.
+) else (
+    REM ── R73 traditional installer: copy from VS_DIR\core\ ──────────────
+    copy "%VS_DIR%\core\vspipe.exe"         "%VS_OUT%\" || goto :err
+    copy "%VS_DIR%\core\VapourSynth.dll"    "%VS_OUT%\" 2>nul
+    copy "%VS_DIR%\core\VSScript.dll"       "%VS_OUT%\" 2>nul
+    copy "%VS_DIR%\core\vapoursynth.pyd"    "%VS_OUT%\" 2>nul
+
+    REM Some VS versions put vapoursynth.pyd in Python site-packages
+    if exist "%PY_SITE%\vapoursynth.pyd" (
+        copy "%PY_SITE%\vapoursynth.pyd" "%VS_OUT%\site-packages\"
+        echo   Copied vapoursynth.pyd from site-packages
+    )
+
+    REM Copy DLLs to site-packages so vapoursynth.pyd can find them (Python 3.8+ DLL search)
+    copy "%VS_DIR%\core\VapourSynth.dll" "%VS_OUT%\site-packages\" 2>nul
+    copy "%VS_DIR%\core\VSScript.dll"    "%VS_OUT%\site-packages\" 2>nul
+    echo   Copied VapourSynth.dll + VSScript.dll to site-packages (DLL search fix^)
+
+    REM Copy VS-related DLLs from core folder
+    for %%F in ("%VS_DIR%\core\*.dll") do copy "%%F" "%VS_OUT%\" 2>nul
 )
 
-REM Python 3.8+ no longer uses PATH when loading DLLs for extension modules (.pyd).
-REM vapoursynth.pyd needs VapourSynth.dll and VSScript.dll in the SAME folder as the .pyd,
-REM so copy the core VS DLLs into site-packages alongside vapoursynth.pyd.
-copy "%VS_DIR%\core\VapourSynth.dll" "%VS_OUT%\site-packages\" 2>nul
-copy "%VS_DIR%\core\VSScript.dll"    "%VS_OUT%\site-packages\" 2>nul
-echo   Copied VapourSynth.dll + VSScript.dll to site-packages (DLL search fix^)
-
 REM Copy python DLL and python3.dll next to vspipe.exe
-REM python3.dll MUST come from the same Python installation as python314.dll — NOT System32
+REM python3.dll MUST come from the same Python installation as python3XX.dll — NOT System32
 copy "%PYTHON_DLL%"  "%VS_OUT%\"
 if exist "%PY_PREFIX%\python3.dll" (
     copy "%PY_PREFIX%\python3.dll" "%VS_OUT%\"
@@ -154,12 +231,7 @@ if exist "%PY_PREFIX%\python3.dll" (
     echo   WARNING: python3.dll not found - VSScript may fail to initialize
 )
 
-REM Copy VS-related DLLs from core folder
-for %%F in ("%VS_DIR%\core\*.dll") do (
-    copy "%%F" "%VS_OUT%\" 2>nul
-)
-
-REM Copy any other VS DLLs from system32 that VS needs
+REM Copy any VC runtime DLLs VS needs
 for %%F in (vcruntime140.dll vcruntime140_1.dll msvcp140.dll) do (
     if exist "%SystemRoot%\System32\%%F" copy "%SystemRoot%\System32\%%F" "%VS_OUT%\" 2>nul
 )
@@ -478,8 +550,8 @@ if not exist "%FF_OUT%\ffmpeg.exe" (
 echo   FFmpeg ready.
 
 REM ── Write version marker ──────────────────────────────────────
-REM NOTE: must use (echo 1) — plain "echo 1>" is parsed as stdout redirect, not text
-(echo 6) > "%OUT_DIR%\vcg_deps.version"
+REM NOTE: must use (echo N) — plain "echo N>" is parsed as stdout redirect, not text
+(echo 7) > "%OUT_DIR%\vcg_deps.version"
 
 REM ── Portable marker for VapourSynth ─────────────────────────────
 REM VSScript.dll checks for this file to enable portable mode.
@@ -490,9 +562,9 @@ echo   portable.vs marker created.
 
 REM ── Create ZIP ────────────────────────────────────────────────
 echo.
-echo Creating vcg-deps-v6.zip...
+echo Creating vcg-deps-v7.zip...
 
-set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v6.zip
+set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v7.zip
 if exist "%OUT_ZIP%" del "%OUT_ZIP%"
 
 powershell -NoProfile -NonInteractive -Command ^
@@ -507,7 +579,7 @@ if not exist "%OUT_ZIP%" (
 for %%F in ("%OUT_ZIP%") do (
     set /a ZIP_MB=%%~zF / 1048576
 )
-echo Done! Created: vcg-deps-v6.zip  (!ZIP_MB! MB)
+echo Done! Created: vcg-deps-v7.zip  (!ZIP_MB! MB)
 
 REM ── Cleanup ───────────────────────────────────────────────────
 rmdir /s /q "%BUILD_DIR%"
@@ -517,14 +589,13 @@ echo ============================================================
 echo  NEXT STEPS:
 echo ============================================================
 echo.
-echo  1. Upload vcg-deps-v6.zip to GitHub as a release asset:
+echo  1. Upload vcg-deps-v7.zip to GitHub as a release asset:
 echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
-echo       Tag: v6
-echo       Asset filename: vcg-deps-v6.zip
+echo       Tag: v7
+echo       Asset filename: vcg-deps-v7.zip
 echo.
-echo  2. Copy the direct download URL and update DEPS_ZIP_URL
-echo     in vcg_deinterlacer_beta_0_5.py:
-echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/download/v6/vcg-deps-v6.zip
+echo  2. Update DEPS_VERSION = '7' and DEPS_ZIP_URL in vcg_deinterlacer_beta06.py:
+echo       .../releases/download/v7/vcg-deps-v7.zip
 echo.
 echo  3. Rebuild the app EXE with build_vcg_deinterlacer.bat
 echo.

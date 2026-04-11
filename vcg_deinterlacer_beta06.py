@@ -194,9 +194,40 @@ FFPROBE_PATH = (os.path.join(FFMPEG_DEPS_DIR, 'ffprobe.exe')
                 if os.path.exists(os.path.join(FFMPEG_DEPS_DIR, 'ffprobe.exe'))
                 else _tool_paths.get('ffprobe_path') or r'C:\ffmpeg\bin\ffprobe.exe')
 
+def _find_pip_vspipe():
+    """Find vspipe.exe from pip-installed VapourSynth (R74+, supports Python 3.12+).
+
+    VapourSynth R74 can be installed via 'pip install vapoursynth' and ships
+    vspipe.exe alongside the package. R74 supports Python 3.12-3.14+, unlike
+    R73 which only supports Python 3.8-3.12.
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec('vapoursynth')
+        if spec and spec.origin:
+            pkg_dir = os.path.dirname(spec.origin)
+            # R74 places vspipe.exe inside the vapoursynth package directory
+            # or as a console_script in Scripts/
+            candidates = [
+                os.path.join(pkg_dir, 'vspipe.exe'),
+                os.path.normpath(os.path.join(pkg_dir, '..', 'vspipe.exe')),
+                os.path.join(os.path.dirname(sys.executable), 'vspipe.exe'),
+                os.path.join(os.path.dirname(sys.executable), 'Scripts', 'vspipe.exe'),
+                os.path.join(sys.prefix, 'Scripts', 'vspipe.exe'),
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    return c
+    except Exception:
+        pass
+    return None
+
+_PIP_VSPIPE = _find_pip_vspipe()
+
 VSPIPE_PATH  = (os.path.join(VS_DEPS_DIR, 'vspipe.exe')
                 if os.path.exists(os.path.join(VS_DEPS_DIR, 'vspipe.exe'))
                 else _tool_paths.get('vspipe_path')
+                or _PIP_VSPIPE
                 or os.path.join(os.environ.get('LOCALAPPDATA', ''),
                                 'Programs', 'VapourSynth', 'core', 'vspipe.exe'))
 
@@ -6776,17 +6807,34 @@ class RestorationWizard(BaseWindow):
                             **({'env': _vs_env} if _vs_env else {}),
                             **({'cwd': _vs_cwd} if _vs_cwd else {}))
 
-        # If portable Python env caused VSScript init failure, retry with
-        # cwd still set but without the custom environment (uses system Python).
-        if (result.returncode != 0 and _vs_env
-                and 'Failed to initialize VSScript' in (result.stderr or '')):
+        # ── Retry chain for "Failed to initialize VSScript" ─────────────────
+        # This error means vsscript.dll cannot find a compatible Python DLL.
+        # Root cause: the bundled VapourSynth R73 only supports Python 3.8–3.12.
+        # If the system Python is 3.13+ (e.g. 3.14), R73 will never find it.
+        #
+        # Retry 1: system env (no custom env) — same portable vspipe, system PATH.
+        # Retry 2: pip-installed VapourSynth R74+ (supports Python 3.12–3.14+).
+        _init_failed = ('Failed to initialize VSScript' in (result.stderr or ''))
+
+        if result.returncode != 0 and _vs_env and _init_failed:
             self._log("  Portable env init failed — retrying with system environment...")
             if diag:
                 diag.captured("vspipe-attempt-1", result.stdout, result.stderr)
-                diag.kv("vspipe-retry", "init failed with portable env, retrying with system env")
+                diag.kv("vspipe-retry-1", "init failed with portable env, retrying system env")
                 diag.cmd(vspipe_cmd)
             result = run_hidden(vspipe_cmd, timeout=None,
                                 **({'cwd': _vs_cwd} if _vs_cwd else {}))
+
+        # Retry 2: pip-installed vspipe (VapourSynth R74+ supports Python 3.14).
+        _init_failed2 = ('Failed to initialize VSScript' in (result.stderr or ''))
+        if result.returncode != 0 and _init_failed2 and _PIP_VSPIPE and _PIP_VSPIPE != VSPIPE_PATH:
+            self._log(f"  Trying pip-installed VapourSynth: {_PIP_VSPIPE}")
+            pip_cmd = [_PIP_VSPIPE, '-c', 'y4m', str(script_path), temp_y4m]
+            if diag:
+                diag.captured("vspipe-attempt-2", result.stdout, result.stderr)
+                diag.kv("vspipe-retry-2", f"trying pip vspipe at {_PIP_VSPIPE}")
+                diag.cmd(pip_cmd)
+            result = run_hidden(pip_cmd, timeout=None)
 
         if result.returncode != 0:
             err_text = (result.stderr or result.stdout or "").strip()
@@ -6795,16 +6843,43 @@ class RestorationWizard(BaseWindow):
                 diag.captured("vspipe", result.stdout, result.stderr)
                 diag.kv("vspipe", f"FAILED (returncode={result.returncode})")
                 diag.close(success=False)
-            # Show the actual vspipe error so the user can report it
+
+            # Detect the Python/VapourSynth version incompatibility specifically.
+            _is_vsscript_fail = 'Failed to initialize VSScript' in err_text
+            _bundled_py_ver = 'unknown'
+            try:
+                for _f in os.listdir(VS_DEPS_DIR):
+                    if _f.lower().startswith('python3') and _f.lower().endswith('._pth'):
+                        _bundled_py_ver = _f[6:-4]   # e.g. "314"
+                        break
+            except Exception:
+                pass
+            _sys_py_ver = f"{sys.version_info.major}{sys.version_info.minor}"
+
             def _show_vs_err():
                 import tkinter.messagebox as _mb
-                short = err_text[:1200] if len(err_text) > 1200 else err_text
-                _mb.showerror(
-                    "VapourSynth Error",
-                    "vspipe failed to process the video.\n\n"
-                    "Error details:\n" + (short if short else "(no output captured)"),
-                    parent=self.winfo_toplevel() if self.winfo_exists() else None
-                )
+                if _is_vsscript_fail:
+                    msg = (
+                        "VapourSynth failed to start (VSScript init error).\n\n"
+                        f"Your system Python is 3.{sys.version_info.minor} "
+                        f"(Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}).\n"
+                        "The bundled VapourSynth R73 only supports Python 3.8–3.12.\n\n"
+                        "To fix — run this command in a terminal, then restart the app:\n\n"
+                        "    pip install vapoursynth\n\n"
+                        "VapourSynth R74+ supports Python 3.12–3.14 and will be\n"
+                        "detected automatically on the next processing attempt.\n\n"
+                        "You do NOT need to delete _deps or change your Python version."
+                    )
+                    _mb.showerror("VapourSynth Version Incompatibility", msg,
+                                  parent=self.winfo_toplevel() if self.winfo_exists() else None)
+                else:
+                    short = err_text[:1200] if len(err_text) > 1200 else err_text
+                    _mb.showerror(
+                        "VapourSynth Error",
+                        "vspipe failed to process the video.\n\n"
+                        "Error details:\n" + (short if short else "(no output captured)"),
+                        parent=self.winfo_toplevel() if self.winfo_exists() else None
+                    )
             self.after(0, _show_vs_err)
             # Clean up temp audio if it exists
             try:
