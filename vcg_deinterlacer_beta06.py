@@ -55,8 +55,8 @@
 # ============================================================
 
 # Version constants
-VERSION = "Beta-03"
-BUILD_DATE = "2026-04-12b"
+VERSION = "Beta-06"
+BUILD_DATE = "2026-04-12c"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -2746,21 +2746,20 @@ class RestorationWizard(BaseWindow):
             "Welcome",         # 0  — hidden from breadcrumb
             "Select File",     # 1  → crumb 1
             "Source",          # 2  → crumb 2
-            "Y/C Delay",       # 3  → crumb 2  (SD only; skipped for DV)
-            "Crop",            # 4  → crumb 2
-            "Noise",           # 5  → crumb 3 "Advanced"
-            "Color Bleeding",  # 6  → crumb 3 "Advanced"
-            "Color Cast",      # 7  → crumb 3 "Advanced"
-            "Levels",          # 8  → crumb 3 "Advanced"
-            "Audio",           # 9  → crumb 3 "Advanced"
-            "Finalize",        # 10 → crumb 4
+            "Crop",            # 3  → crumb 2
+            "Y/C Delay",       # 4  → crumb 3 "Advanced" ①
+            "Noise",           # 5  → crumb 3 "Advanced" ②
+            "Color Cast",      # 6  → crumb 3 "Advanced" ③
+            "Levels",          # 7  → crumb 3 "Advanced" ④
+            "Audio",           # 8  → crumb 3 "Advanced" ⑤
+            "Finalize",        # 9  → crumb 4
         ]
         # Breadcrumb display groups: each entry = (label, [step_indices])
         self.crumbs = [
             ("Select File", [1]),
-            ("Source",      [2, 3, 4]),
-            ("Advanced",    [5, 6, 7, 8, 9]),
-            ("Finalize",    [10]),
+            ("Source",      [2, 3]),
+            ("Advanced",    [4, 5, 6, 7, 8]),
+            ("Finalize",    [9]),
         ]
         self.current_step = 0
         
@@ -3120,26 +3119,25 @@ class RestorationWizard(BaseWindow):
         # Update navigation buttons
         self.back_btn.set_disabled(step_index <= 1)
         # On the last advanced page, label the button to indicate Finalize is next
-        if step_index == 9:
+        if step_index == 8:
             self.next_btn.text = "Finalize →"
         else:
             self.next_btn.text = "Next →"
         self.next_btn.set_disabled(False)
         self.next_btn._draw()
 
-        # Show appropriate page (11-step navigation)
+        # Show appropriate page (10-step navigation)
         step_methods = [
             self._page_welcome,         # 0
             self._page_select_file,     # 1
             self._page_source_details,  # 2
-            self._page_yc_delay,        # 3  Y/C Delay (SD only)
-            self._page_crop_preset,     # 4  Crop Preset
-            self._page_noise,           # 5  Advanced ①
-            self._page_chroma,          # 6  Advanced ② Color Bleeding
-            self._page_color,           # 7  Advanced ③ Color Cast
-            self._page_levels,          # 8  Advanced ④
-            self._page_audio,           # 9  Advanced ⑤
-            self._page_finalize,        # 10
+            self._page_crop_preset,     # 3  Crop Preset
+            self._page_yc_delay,        # 4  Advanced ① Y/C Delay
+            self._page_noise,           # 5  Advanced ②
+            self._page_color,           # 6  Advanced ③ Color Cast
+            self._page_levels,          # 7  Advanced ④
+            self._page_audio,           # 8  Advanced ⑤
+            self._page_finalize,        # 9
         ]
 
         if step_index < len(step_methods):
@@ -3157,21 +3155,13 @@ class RestorationWizard(BaseWindow):
                 self._validate_batch_types(files, on_ok=lambda: self._show_step(2))
                 return
 
-        # ── Step 2: Source Details → Y/C Delay (SD) or Crop (DV) ─────────────
+        # ── Step 2: Source Details → Crop ────────────────────────────────────
         if self.current_step == 2:
-            if self.config_data.get('capture_method') == 'sd':
-                self._show_step(3)  # Y/C Delay
-            else:
-                self._show_step(4)  # Skip Y/C for DV; go to Crop
+            self._show_step(3)
             return
 
-        # ── Step 3: Y/C Delay → Crop ──────────────────────────────────────────
+        # ── Step 3: Crop → "Process Now or Advanced?" ────────────────────────
         if self.current_step == 3:
-            self._show_step(4)
-            return
-
-        # ── Step 4: Crop → "Process Now or Advanced?" ─────────────────────────
-        if self.current_step == 4:
             self._ask_basic_or_advanced()
             return
 
@@ -3183,8 +3173,8 @@ class RestorationWizard(BaseWindow):
 
     def _ask_basic_or_advanced(self):
         """After Crop, let the user choose to process now or configure advanced options."""
-        finalize_step = 10  # "Finalize" in the 11-step list
-        advanced_step = 5   # First advanced page ("Noise")
+        finalize_step = 9  # "Finalize" in the 10-step list
+        advanced_step = 4  # First advanced page ("Y/C Delay")
 
         dlg = tk.Toplevel(self)
         dlg.title("Ready to process?")
@@ -3204,7 +3194,7 @@ class RestorationWizard(BaseWindow):
                  font=('Segoe UI', 16, 'bold'), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
         tk.Label(f,
                  text="You can process now using just deinterlacing, or continue to configure "
-                      "optional enhancements (noise removal, color analysis, levels, audio).",
+                      "optional enhancements (Y/C delay, noise removal, color analysis, levels, audio).",
                  font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
                  wraplength=490, justify='left').pack(anchor='w', pady=(8, 20))
 
@@ -3239,7 +3229,7 @@ class RestorationWizard(BaseWindow):
         adv_btn = tk.Frame(btn_row, bg=Colors.BG_CARD, cursor='hand2')
         adv_btn.pack(fill='x', ipady=8)
         adv_lbl = tk.Label(adv_btn,
-                           text="⚙   Advanced Options  (noise removal, color, levels, audio)",
+                           text="⚙   Advanced Options  (Y/C delay, noise removal, color, levels, audio)",
                            font=('Segoe UI', 11), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD, cursor='hand2')
         adv_lbl.pack()
         adv_btn.bind('<Button-1>', lambda e: go_advanced())
@@ -3300,11 +3290,7 @@ class RestorationWizard(BaseWindow):
 
     def _prev_step(self):
         if self.current_step > 0:
-            target = self.current_step - 1
-            # Skip Y/C Delay (step 3) when going back if capture is DV
-            if target == 3 and self.config_data.get('capture_method') != 'sd':
-                target = 2
-            self._show_step(target)
+            self._show_step(self.current_step - 1)
     
     # ==================== STEP PAGES ====================
     
@@ -3801,7 +3787,7 @@ class RestorationWizard(BaseWindow):
     # ══════════════════════════════════════════════════════════════════════════
 
     def _page_yc_delay(self):
-        """Step 3 — Y/C Delay (chroma horizontal shift) per file."""
+        """Step 4 (Advanced ①) — Y/C Delay (chroma horizontal shift) per file."""
         files = self.config_data.get('input_files', [])
         if not files and 'input_path' in self.config_data:
             files = [self.config_data['input_path']]
@@ -5222,243 +5208,6 @@ class RestorationWizard(BaseWindow):
         
         self.noise_var.trace_add('write', lambda *_: self.config_data.update({'noise_level': self.noise_var.get()}))
     
-    def _page_chroma(self):
-        tk.Label(self.page_container, text="Color Bleeding",
-                font=('Segoe UI', 22, 'bold'),
-                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
-
-        self._show_artifact_example(self.page_container, 'chroma',
-            "What color bleeding looks like — colors smearing horizontally from composite video:")
-        self._show_experimental_notice(self.page_container)
-
-        # Check if multiple files selected
-        num_files = len(self.config_data.get('input_files', []))
-        if num_files > 1:
-            # For batch processing, show simple options without analysis
-            tk.Label(self.page_container, text="Select color bleeding fix for all files",
-                    font=('Segoe UI', 12),
-                    fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(4, 20))
-            
-            initial_chroma = 'yes' if self.config_data.get('chroma_shift') else 'no'
-            self.config_data['chroma_shift'] = (initial_chroma == 'yes')
-            self.chroma_var = tk.StringVar(value=initial_chroma)
-            
-            card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
-            card.pack(fill='x')
-            
-            ModernRadioButton(card, "No color bleeding fix", self.chroma_var, "no",
-                             "Colors look properly aligned").pack(fill='x')
-            ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
-            ModernRadioButton(card, "Yes, fix color bleeding", self.chroma_var, "yes",
-                             "Colors appear smeared or shifted sideways").pack(fill='x')
-            
-            self.chroma_var.trace_add('write', lambda *_: self.config_data.update({'chroma_shift': self.chroma_var.get() == 'yes'}))
-            return
-        
-        # Single file - show analysis with progress indicator
-        
-        # Progress indicator card (prominent)
-        self.chroma_progress_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=20, pady=20)
-        self.chroma_progress_card.pack(fill='x', pady=(10, 0))
-        
-        # Spinner animation
-        self.chroma_spinner_label = tk.Label(self.chroma_progress_card, text="⏳",
-                font=('Segoe UI', 28),
-                fg=Colors.ACCENT, bg=Colors.BG_CARD)
-        self.chroma_spinner_label.pack()
-        
-        self.chroma_status_label = tk.Label(self.chroma_progress_card, 
-                text="Analyzing color bleeding...",
-                font=('Segoe UI', 12, 'bold'),
-                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD)
-        self.chroma_status_label.pack(pady=(10, 5))
-        
-        self.chroma_progress_label = tk.Label(self.chroma_progress_card, 
-                text="Sampling frame 1 of 10",
-                font=('Segoe UI', 12),
-                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD)
-        self.chroma_progress_label.pack()
-        
-        self.chroma_detail_label = tk.Label(self.chroma_progress_card, 
-                text="Checking chroma channel spread for bleeding artifacts",
-                font=('Segoe UI', 9, 'italic'),
-                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD)
-        self.chroma_detail_label.pack(pady=(10, 0))
-        
-        # Analysis results frame (hidden until analysis complete)
-        self.chroma_results_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
-        self.chroma_results_frame.pack(fill='x')
-        
-        # Options frame (populated after analysis)
-        self.chroma_options_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
-        self.chroma_options_frame.pack(fill='x', pady=(10, 0))
-        
-        # Get initial value
-        initial_chroma = 'yes' if self.config_data.get('chroma_shift') else 'no'
-        self.config_data['chroma_shift'] = (initial_chroma == 'yes')
-        self.chroma_var = tk.StringVar(value=initial_chroma)
-        
-        # Disable Next button during analysis
-        self.chroma_analysis_complete = False
-        if hasattr(self, 'next_btn'):
-            self.next_btn.configure(state='disabled')
-        
-        # Start spinner animation
-        self._animate_chroma_spinner()
-        
-        # Run analysis in thread
-        threading.Thread(target=self._run_chroma_analysis, daemon=True).start()
-    
-    def _animate_chroma_spinner(self):
-        """Animate the spinner during analysis."""
-        if not hasattr(self, 'chroma_analysis_complete') or self.chroma_analysis_complete:
-            return
-        
-        if not hasattr(self, 'chroma_spinner_label') or not self.chroma_spinner_label.winfo_exists():
-            return
-            
-        spinners = ['⏳', '⌛']
-        current = self.chroma_spinner_label.cget('text')
-        next_idx = (spinners.index(current) + 1) % len(spinners) if current in spinners else 0
-        self.chroma_spinner_label.config(text=spinners[next_idx])
-        
-        self.after(500, self._animate_chroma_spinner)
-    
-    def _update_chroma_progress(self, current, total):
-        """Update the chroma analysis progress indicator."""
-        if hasattr(self, 'chroma_progress_label') and self.chroma_progress_label.winfo_exists():
-            self.after(0, lambda: self.chroma_progress_label.config(
-                text=f"Sampling frame {current} of {total}"))
-    
-    def _run_chroma_analysis(self):
-        if 'input_path' not in self.config_data:
-            self.after(0, self._finish_chroma_analysis_error, "❌ No file selected")
-            return
-        
-        try:
-            # Run color bleeding analysis with progress callback
-            bleed_data = analyze_color_bleeding(
-                self.config_data['input_path'],
-                sample_frames=10,
-                progress_callback=self._update_chroma_progress
-            )
-            
-            if bleed_data and bleed_data.get('analyzed'):
-                self.config_data['bleed_data'] = bleed_data
-                self.after(0, lambda: self._show_chroma_results(bleed_data))
-            else:
-                self.after(0, self._finish_chroma_analysis_error, "Could not analyze color bleeding")
-        except Exception as e:
-            self.after(0, self._finish_chroma_analysis_error, f"Analysis error: {str(e)[:30]}")
-    
-    def _finish_chroma_analysis_error(self, message):
-        """Handle analysis error - show message and fallback options."""
-        self.chroma_analysis_complete = True
-        if hasattr(self, 'next_btn'):
-            self.next_btn.configure(state='normal')
-        
-        # Hide progress card
-        if hasattr(self, 'chroma_progress_card'):
-            self.chroma_progress_card.pack_forget()
-        
-        # Show error
-        error_label = tk.Label(self.chroma_results_frame, text=message,
-                font=('Segoe UI', 12),
-                fg=Colors.ERROR, bg=Colors.BG_MAIN)
-        error_label.pack(anchor='w', pady=(0, 10))
-        
-        self._show_chroma_options_fallback()
-    
-    def _show_chroma_results(self, data):
-        """Display chroma analysis results."""
-        # Mark analysis complete and re-enable Next button
-        self.chroma_analysis_complete = True
-        if hasattr(self, 'next_btn'):
-            self.next_btn.configure(state='normal')
-        
-        # Hide progress card
-        if hasattr(self, 'chroma_progress_card'):
-            self.chroma_progress_card.pack_forget()
-        
-        # Show analysis results
-        result_card = tk.Frame(self.chroma_results_frame, bg=Colors.BG_CARD, padx=15, pady=12)
-        result_card.pack(fill='x')
-        
-        tk.Label(result_card, text="🎨 Color Bleeding Analysis",
-                font=('Segoe UI', 10, 'bold'),
-                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w')
-        
-        # Level indicator
-        level = data.get('bleed_level', 'unknown')
-        desc = data.get('bleed_desc', 'Unknown')
-        
-        if level == 'significant':
-            icon = "🔴"
-            color = Colors.ERROR
-        elif level == 'moderate':
-            icon = "🟠"
-            color = Colors.WARNING
-        elif level == 'light':
-            icon = "🟡"
-            color = Colors.WARNING
-        else:
-            icon = "🟢"
-            color = Colors.SUCCESS
-        
-        tk.Label(result_card, text=f"{icon} {desc}",
-                font=('Segoe UI', 12),
-                fg=color, bg=Colors.BG_CARD).pack(anchor='w', pady=(3, 0))
-        
-        # Technical details
-        samples = data.get('samples_analyzed', 0)
-        score = data.get('bleeding_score', 0)
-        tech_text = f"Analyzed {samples} samples  •  Chroma spread score: {score:.1f}"
-        tk.Label(result_card, text=tech_text,
-                font=('Segoe UI', 12),
-                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(anchor='w', pady=(2, 0))
-        
-        # Recommendation
-        recommendation = data.get('recommendation', False)
-        if recommendation:
-            rec_text = "💡 Recommendation: Fix color bleeding"
-            self.chroma_var.set('yes')
-        else:
-            rec_text = "💡 Recommendation: No fix needed"
-            self.chroma_var.set('no')
-        
-        tk.Label(result_card, text=rec_text,
-                font=('Segoe UI', 10, 'bold'),
-                fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(anchor='w', pady=(10, 0))
-        
-        # Show options
-        self._show_chroma_options()
-    
-    def _show_chroma_options_fallback(self):
-        """Show basic chroma options without analysis."""
-        card = tk.Frame(self.chroma_options_frame, bg=Colors.BG_CARD)
-        card.pack(fill='x')
-        
-        ModernRadioButton(card, "No color bleeding fix", self.chroma_var, "no",
-                         "Colors look properly aligned").pack(fill='x')
-        ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
-        ModernRadioButton(card, "Yes, fix color bleeding", self.chroma_var, "yes",
-                         "Colors appear smeared or shifted sideways").pack(fill='x')
-        
-        self.chroma_var.trace_add('write', lambda *_: self.config_data.update({'chroma_shift': self.chroma_var.get() == 'yes'}))
-    
-    def _show_chroma_options(self):
-        """Show chroma options."""
-        card = tk.Frame(self.chroma_options_frame, bg=Colors.BG_CARD)
-        card.pack(fill='x', pady=(10, 0))
-        
-        ModernRadioButton(card, "No color bleeding fix", self.chroma_var, "no",
-                         "Keep original colors").pack(fill='x')
-        ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
-        ModernRadioButton(card, "Yes, fix color bleeding", self.chroma_var, "yes",
-                         "Shift chroma to correct horizontal bleeding").pack(fill='x')
-        
-        self.chroma_var.trace_add('write', lambda *_: self.config_data.update({'chroma_shift': self.chroma_var.get() == 'yes'}))
-    
     def _page_dropouts(self):
         tk.Label(self.page_container, text="Dropout Removal",
                 font=('Segoe UI', 22, 'bold'),
@@ -6715,7 +6464,7 @@ class RestorationWizard(BaseWindow):
                 diag.section("Detected Parameters / Settings")
                 _diag_keys = [
                     'video_format', 'field_order', 'capture_method', 'crop_preset',
-                    'yc_delay', 'ivtc_mode', 'noise_level', 'chroma_bleeding_level',
+                    'yc_delay', 'ivtc_mode', 'noise_level',
                     'color_cast_correction', 'levels_correction', 'audio_mode',
                     'output_format', 'par_correction', 'mix_audio', 'save_diagnostic_log',
                 ]
