@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "Beta-06"
-BUILD_DATE = "2026-04-12e"
+BUILD_DATE = "2026-04-12f"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -6703,11 +6703,18 @@ class RestorationWizard(BaseWindow):
                 ])
                 _py_cmd = [sys.executable, '-c', _wrapper]
 
-                # Env: keep Python env vars intact (Python 3.14 needs them),
-                # but prepend pip pkg dir + plugins64 so plugin DLLs resolve.
+                # Env: keep Python env vars intact (Python 3.14 needs them).
+                # PATH order:
+                #   1. VS_DEPS_DIR  — bundled vapoursynth.dll, libfftw3*.dll,
+                #                    python3.dll and other DLL deps plugins need
+                #   2. _plugins64   — the plugin DLLs themselves (needed by each other)
+                #   3. _pip_pkg_dir — pip vapoursynth.dll (already loaded in memory)
+                # VS_DEPS_DIR must come first so plugins find the correct
+                # companion DLLs (libfftw3, etc.) that live alongside vspipe.
                 _py_env = os.environ.copy()
-                _py_env['PATH'] = (_pip_pkg_dir + os.pathsep
+                _py_env['PATH'] = (VS_DEPS_DIR + os.pathsep
                                    + _plugins64 + os.pathsep
+                                   + _pip_pkg_dir + os.pathsep
                                    + _py_env.get('PATH', ''))
 
                 if diag:
@@ -7456,7 +7463,7 @@ class FirstRunSetupWindow(tk.Tk):
         # Install Python packages: Pillow for image previews, vapoursynth for
         # Python-direct fallback processing when the bundled R73 vsscript.dll
         # cannot find the user's Python (e.g. Python 3.13/3.14 with R73).
-        self._pip_install_packages(['Pillow', 'numpy', 'vapoursynth'])
+        self._pip_install_packages(['Pillow', 'numpy', 'tkinterdnd2', 'vapoursynth'])
 
         self._set_status("Setup complete — launching VCG Deinterlacer…")
         self._log_line("")
@@ -7521,14 +7528,20 @@ if __name__ == '__main__':
             )
             _r.destroy()
         else:
-            # ── Re-import PIL if it was just installed by setup ───
-            # (HAS_PIL was False at startup; pip may have fixed that)
+            # ── Re-import optional packages installed by setup ────
             if not HAS_PIL:
                 try:
                     from PIL import Image, ImageTk  # noqa: F811,F401
                     HAS_PIL = True  # noqa: F811
                     print("[VCG Diag] PIL re-imported after setup install.")
                 except ImportError:
+                    pass
+            if not HAS_DND:
+                try:
+                    from tkinterdnd2 import DND_FILES, TkinterDnD  # noqa: F811,F401
+                    HAS_DND = True  # noqa: F811
+                    print("[VCG Diag] tkinterdnd2 re-imported after setup install.")
+                except Exception:
                     pass
 
             # ── Main wizard ──────────────────────────────────────
