@@ -6872,12 +6872,13 @@ class RestorationWizard(BaseWindow):
                             **({'cwd': _vs_cwd} if _vs_cwd else {}))
 
         # ── Retry chain for "Failed to initialize VSScript" ─────────────────
-        # This error means vsscript.dll cannot find a compatible Python DLL.
-        # Root cause: the bundled VapourSynth R73 only supports Python 3.8–3.12.
-        # If the system Python is 3.13+ (e.g. 3.14), R73 will never find it.
+        # Root cause: the bundled VapourSynth R73 vsscript.dll only knows how
+        # to find Python 3.8–3.12. With Python 3.14 it never finds a DLL.
         #
-        # Retry 1: system env (no custom env) — same portable vspipe, system PATH.
-        # Retry 2: pip-installed VapourSynth R74+ (supports Python 3.12–3.14+).
+        # Retry 1: same vspipe, system PATH (no custom env).
+        # Retry 2: pip-installed vspipe.exe if available (R74+, Python 3.14 native).
+        # Retry 3: run the .vpy script directly via Python + pip vapoursynth,
+        #          bypassing vspipe.exe and vsscript.dll entirely.
         _init_failed = ('Failed to initialize VSScript' in (result.stderr or ''))
 
         if result.returncode != 0 and _vs_env and _init_failed:
@@ -6900,26 +6901,60 @@ class RestorationWizard(BaseWindow):
                 diag.cmd(pip_cmd)
             result = run_hidden(pip_cmd, timeout=None)
 
-        # Retry 3: upgrade bundled vsscript.dll from pip package, then retry bundled vspipe.
-        # The pip-installed vapoursynth==73 for Python 3.14 ships vsscript.dll compiled for
-        # Python 3.14.  Copying it into _deps\vs\ fixes the init failure permanently.
+        # Retry 3: Python-direct — execute the .vpy script via sys.executable
+        # with pip-installed vapoursynth.  This bypasses vspipe.exe and
+        # vsscript.dll entirely, avoiding the Python version incompatibility.
         _init_failed3 = ('Failed to initialize VSScript' in (result.stderr or ''))
         if result.returncode != 0 and _init_failed3:
-            self._log("  Attempting to upgrade bundled vsscript.dll from pip package...")
-            if diag:
-                diag.captured("vspipe-attempt-3", result.stdout, result.stderr)
-            _upgraded = _try_upgrade_bundled_vsscript()
-            if _upgraded:
-                self._log("  Upgrade succeeded — retrying bundled vspipe...")
+            _has_pip_vs = False
+            _pip_pkg_dir = ''
+            try:
+                import importlib.util as _ilu
+                _spec = _ilu.find_spec('vapoursynth')
+                if _spec and _spec.origin:
+                    _has_pip_vs = True
+                    _pip_pkg_dir = os.path.dirname(_spec.origin)
+            except Exception:
+                pass
+
+            if _has_pip_vs:
+                self._log("  Trying Python-direct fallback (bypassing vspipe/vsscript)...")
+                _site_pkg  = os.path.join(VS_DEPS_DIR, 'site-packages')
+                _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins64')
+                if not os.path.isdir(_plugins64):
+                    _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins')
+
+                # Wrapper: import pip vapoursynth first, then exec the .vpy script.
+                # sys.path gets deps/site-packages so havsfunc/vsutil are found.
+                _wrapper = '\n'.join([
+                    'import sys',
+                    f'sys.path.insert(0, {repr(_site_pkg)})',
+                    'import vapoursynth as vs  # pip-installed, Python 3.14 compatible',
+                    f'with open({repr(str(script_path))}, "r", encoding="utf-8") as _f:',
+                    '    _code = _f.read()',
+                    f'exec(compile(_code, {repr(str(script_path))}, "exec"))',
+                    '_node = vs.get_output(0)',
+                    f'with open({repr(temp_y4m)}, "wb") as _out:',
+                    '    _node.output(_out, y4m=True)',
+                ])
+                _py_cmd = [sys.executable, '-c', _wrapper]
+
+                # Env: keep Python env vars intact (Python 3.14 needs them),
+                # but prepend pip pkg dir + plugins64 so plugin DLLs resolve.
+                _py_env = os.environ.copy()
+                _py_env['PATH'] = (_pip_pkg_dir + os.pathsep
+                                   + _plugins64 + os.pathsep
+                                   + _py_env.get('PATH', ''))
+
                 if diag:
-                    dlls_info = ', '.join(n for _, n in _find_pip_vapoursynth_dlls())
-                    diag.kv("vspipe-retry-3", f"copied pip DLLs to _deps/vs/ ({dlls_info}), retrying")
-                    diag.cmd(vspipe_cmd)
-                result = run_hidden(vspipe_cmd, timeout=None,
-                                    **({'env': _vs_env} if _vs_env else {}),
-                                    **({'cwd': _vs_cwd} if _vs_cwd else {}))
+                    diag.captured("vspipe-attempt-3", result.stdout, result.stderr)
+                    diag.kv("vspipe-retry-3",
+                            f"Python-direct: {sys.executable} (pip vapoursynth at {_pip_pkg_dir})")
+                    diag.raw(f"wrapper script:\n{_wrapper}")
+
+                result = run_hidden(_py_cmd, timeout=None, env=_py_env)
             else:
-                self._log("  Could not find pip vsscript.dll to upgrade.")
+                self._log("  pip vapoursynth not found — cannot use Python-direct fallback.")
 
         if result.returncode != 0:
             err_text = (result.stderr or result.stdout or "").strip()
