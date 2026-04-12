@@ -55,8 +55,8 @@
 # ============================================================
 
 # Version constants
-VERSION = "Beta-03"
-BUILD_DATE = "2026-04-10"
+VERSION = "Beta-06"
+BUILD_DATE = "2026-04-12h"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -106,14 +106,27 @@ try:
 except ImportError:
     HAS_PIL = False
 
-# Check for tkinterdnd2 for drag and drop
+# Check for tkinterdnd2 for drag and drop.
 # Catch all exceptions, not just ImportError — in a Nuitka onefile build the
 # tkdnd DLL can fail to load with OSError after a successful import.
+# On a fresh machine tkinterdnd2 may not be installed yet.  We attempt a
+# silent pip install here (before BaseWindow is defined) so that the first
+# run after setup gets DnD support without requiring a restart.
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
     HAS_DND = True
 except Exception:
-    HAS_DND = False
+    try:
+        import subprocess as _sp
+        _sp.run(
+            [sys.executable, '-m', 'pip', 'install', 'tkinterdnd2',
+             '--quiet', '--disable-pip-version-check'],
+            capture_output=True, timeout=60
+        )
+        from tkinterdnd2 import DND_FILES, TkinterDnD
+        HAS_DND = True
+    except Exception:
+        HAS_DND = False
 
 # ============================================================
 # Configuration
@@ -194,9 +207,104 @@ FFPROBE_PATH = (os.path.join(FFMPEG_DEPS_DIR, 'ffprobe.exe')
                 if os.path.exists(os.path.join(FFMPEG_DEPS_DIR, 'ffprobe.exe'))
                 else _tool_paths.get('ffprobe_path') or r'C:\ffmpeg\bin\ffprobe.exe')
 
+def _find_pip_vspipe():
+    """Find vspipe.exe from pip-installed VapourSynth (R74+, supports Python 3.12+).
+
+    VapourSynth R74 can be installed via 'pip install vapoursynth' and ships
+    vspipe.exe alongside the package. R74 supports Python 3.12-3.14+, unlike
+    R73 which only supports Python 3.8-3.12.
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec('vapoursynth')
+        if spec and spec.origin:
+            pkg_dir = os.path.dirname(spec.origin)
+            # R74 places vspipe.exe inside the vapoursynth package directory
+            # or as a console_script in Scripts/
+            candidates = [
+                os.path.join(pkg_dir, 'vspipe.exe'),
+                os.path.normpath(os.path.join(pkg_dir, '..', 'vspipe.exe')),
+                os.path.join(os.path.dirname(sys.executable), 'vspipe.exe'),
+                os.path.join(os.path.dirname(sys.executable), 'Scripts', 'vspipe.exe'),
+                os.path.join(sys.prefix, 'Scripts', 'vspipe.exe'),
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    return c
+    except Exception:
+        pass
+    return None
+
+
+def _find_pip_vapoursynth_dlls():
+    """Return a list of (src_path, dll_name) for VSScript/VapourSynth DLLs
+    found in the pip-installed vapoursynth package.
+
+    The pip-installed vapoursynth==73 for Python 3.14 contains VSScript.dll
+    and VapourSynth.dll compiled against Python 3.14.  Copying these to
+    VS_DEPS_DIR lets the bundled vspipe.exe (R73) use Python 3.14.
+    """
+    results = []
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec('vapoursynth')
+        if not spec or not spec.origin:
+            return results
+
+        # Build candidate search directories
+        pkg_dir = os.path.dirname(spec.origin)
+        site_dir = os.path.dirname(pkg_dir)  # one level up = site-packages root
+        search_dirs = [pkg_dir, site_dir]
+        if spec.submodule_search_locations:
+            search_dirs.extend(list(spec.submodule_search_locations))
+
+        target_names = {'vsscript.dll', 'vapoursynth.dll'}
+        seen = set()
+        for d in search_dirs:
+            if not os.path.isdir(d):
+                continue
+            try:
+                for fname in os.listdir(d):
+                    if fname.lower() in target_names and fname.lower() not in seen:
+                        results.append((os.path.join(d, fname), fname))
+                        seen.add(fname.lower())
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return results
+
+
+def _try_upgrade_bundled_vsscript():
+    """Copy Python-3.14-compatible DLLs from pip package to _deps/vs/.
+
+    The bundled R73 vsscript.dll was compiled to find Python 3.8-3.12 only.
+    The pip-installed vapoursynth==73 for Python 3.14 has a vsscript.dll
+    that was compiled for Python 3.14.  Replacing the bundled DLL fixes the
+    'Failed to initialize VSScript' error without needing a new deps package.
+
+    Returns True if at least one DLL was copied successfully.
+    """
+    if not os.path.isdir(VS_DEPS_DIR):
+        return False
+    dlls = _find_pip_vapoursynth_dlls()
+    copied = 0
+    for src, name in dlls:
+        dst = os.path.join(VS_DEPS_DIR, name)
+        try:
+            shutil.copy2(src, dst)
+            copied += 1
+        except Exception:
+            pass
+    return copied > 0
+
+
+_PIP_VSPIPE = _find_pip_vspipe()
+
 VSPIPE_PATH  = (os.path.join(VS_DEPS_DIR, 'vspipe.exe')
                 if os.path.exists(os.path.join(VS_DEPS_DIR, 'vspipe.exe'))
                 else _tool_paths.get('vspipe_path')
+                or _PIP_VSPIPE
                 or os.path.join(os.environ.get('LOCALAPPDATA', ''),
                                 'Programs', 'VapourSynth', 'core', 'vspipe.exe'))
 
@@ -235,13 +343,15 @@ def get_vspipe_env():
       - python3XX.zip   (Python stdlib — encodings, etc.)
       - python3XX._pth  (tells Python where to find stdlib + site-packages)
       - site-packages\\  (vapoursynth.pyd, havsfunc.py, ...)
-      - plugins\\        (lsmas.dll, libmvtools.dll, fmtconv.dll)
+      - plugins64\\ or plugins\\  (lsmas.dll, libmvtools.dll, fmtconv.dll)
+      - portable.vs     (marker that tells VSScript to use portable Python mode)
 
     The ._pth file handles module search paths.  We must NOT set PYTHONHOME
     or PYTHONPATH — those conflict with the ._pth mechanism and can cause
     "Failed to import encodings" when the embedded Python starts up.
 
     We only need to:
+      - Ensure portable.vs marker file is present (VSScript portable mode)
       - Put VS_DEPS_DIR first on PATH (so DLLs are found there)
       - Set VSPluginPath for VapourSynth plugin auto-loading
       - REMOVE any inherited PYTHONHOME / PYTHONPATH from Nuitka's runtime
@@ -249,27 +359,121 @@ def get_vspipe_env():
     if not os.path.isdir(VS_DEPS_DIR):
         return None   # not in portable mode, use system environment
 
+    # ── Ensure portable.vs marker exists.
+    #    VSScript.dll checks for this file next to itself to enable portable mode.
+    #    Without it, VSScript tries to find Python via the Windows registry,
+    #    which fails (or finds the wrong version) when system Python differs.
+    portable_marker = os.path.join(VS_DEPS_DIR, 'portable.vs')
+    if not os.path.exists(portable_marker):
+        try:
+            open(portable_marker, 'w').close()
+        except Exception:
+            pass  # non-fatal; continue and hope VSScript finds Python anyway
+
     env = os.environ.copy()
 
-    # ── Remove Python variables that conflict with the ._pth file ──
-    # Nuitka's runtime may have set these; they must not leak into vspipe.
-    for key in ('PYTHONHOME', 'PYTHONPATH', 'PYTHONNOUSERSITE',
-                'PYTHONSTARTUP', 'PYTHONPLATLIBDIR'):
-        env.pop(key, None)
+    # ── Remove ALL Python-related env vars to prevent Nuitka's embedded
+    #    Python from conflicting with the portable Python inside _deps\vs\.
+    for _k in list(env.keys()):
+        if _k.upper().startswith('PYTHON'):
+            env.pop(_k, None)
+    # Also remove virtual-env and launcher markers
+    for _k in ('__PYVENV_LAUNCHER__', 'VIRTUAL_ENV', 'VIRTUAL_ENV_PROMPT'):
+        env.pop(_k, None)
 
-    # ── Set VapourSynth plugin path (hint — may be ignored by VS R73 portable) ──
-    env['VSPluginPath'] = os.path.join(VS_DEPS_DIR, 'plugins64')
-
-    # ── Prepend VS_DEPS_DIR and plugins64 to PATH.
-    #    VS_DEPS_DIR  → Windows finds python3XX.dll, VapourSynth.dll, VSScript.dll
-    #    plugins64    → Windows finds libfftw3-3.dll and other plugin sub-deps
-    #                   when core.std.LoadPlugin() loads DFTTest, fft3dfilter, etc.
+    # ── Find the plugins directory (build script may use plugins64\ or plugins\)
     plugins64_dir = os.path.join(VS_DEPS_DIR, 'plugins64')
+    plugins_dir   = os.path.join(VS_DEPS_DIR, 'plugins')
+    if os.path.isdir(plugins64_dir):
+        plugin_dir = plugins64_dir
+    elif os.path.isdir(plugins_dir):
+        plugin_dir = plugins_dir
+    else:
+        plugin_dir = plugins64_dir  # default even if missing
+
+    # ── Set VapourSynth plugin path ──────────────────────────────────────────
+    env['VSPluginPath'] = plugin_dir
+
+    # ── Prepend VS_DEPS_DIR and plugin_dir to PATH.
+    #    VS_DEPS_DIR  → Windows finds python3XX.dll, VapourSynth.dll, VSScript.dll
+    #    plugin_dir   → Windows finds libfftw3-3.dll and other plugin sub-deps
+    #                   when core.std.LoadPlugin() loads DFTTest, fft3dfilter, etc.
     env['PATH'] = (VS_DEPS_DIR + os.pathsep
-                   + plugins64_dir + os.pathsep
+                   + plugin_dir + os.pathsep
                    + env.get('PATH', ''))
 
     return env
+
+
+def _collect_vs_deps_diagnostic():
+    """Return a multi-line string listing key files in VS_DEPS_DIR for diagnostics."""
+    lines = []
+    lines.append(f"VS_DEPS_DIR : {VS_DEPS_DIR}")
+    lines.append(f"  exists    : {os.path.isdir(VS_DEPS_DIR)}")
+    if not os.path.isdir(VS_DEPS_DIR):
+        return '\n'.join(lines)
+
+    # List top-level files
+    try:
+        top = sorted(os.listdir(VS_DEPS_DIR))
+    except Exception as e:
+        lines.append(f"  listdir error: {e}")
+        return '\n'.join(lines)
+
+    lines.append(f"  top-level files ({len(top)}):")
+    for name in top:
+        full = os.path.join(VS_DEPS_DIR, name)
+        if os.path.isfile(full):
+            size = os.path.getsize(full)
+            lines.append(f"    {name}  ({size:,} bytes)")
+        else:
+            lines.append(f"    {name}/  [dir]")
+
+    # Check specific key files
+    key_files = [
+        'vspipe.exe', 'VSScript.dll', 'VapourSynth.dll',
+        'portable.vs',
+    ]
+    # Python DLL and stdlib — detect by pattern
+    try:
+        for f in top:
+            if f.lower().startswith('python3') and (f.lower().endswith('.dll')
+                    or f.lower().endswith('.zip') or f.lower().endswith('._pth')):
+                key_files.append(f)
+    except Exception:
+        pass
+
+    lines.append("  key file check:")
+    for kf in key_files:
+        fp = os.path.join(VS_DEPS_DIR, kf)
+        exists = os.path.exists(fp)
+        lines.append(f"    {'OK  ' if exists else 'MISS'} {kf}")
+
+    # List site-packages
+    sp = os.path.join(VS_DEPS_DIR, 'site-packages')
+    if os.path.isdir(sp):
+        try:
+            sp_files = sorted(os.listdir(sp))
+            lines.append(f"  site-packages ({len(sp_files)} items): " + ', '.join(sp_files[:30]))
+        except Exception as e:
+            lines.append(f"  site-packages listdir error: {e}")
+    else:
+        lines.append("  site-packages/: MISSING")
+
+    # List plugins directory
+    for pdir in ('plugins64', 'plugins'):
+        pd = os.path.join(VS_DEPS_DIR, pdir)
+        if os.path.isdir(pd):
+            try:
+                pd_files = sorted(os.listdir(pd))
+                lines.append(f"  {pdir}/ ({len(pd_files)} items): " + ', '.join(pd_files[:20]))
+            except Exception as e:
+                lines.append(f"  {pdir}/ listdir error: {e}")
+            break
+    else:
+        lines.append("  plugins64/ and plugins/: BOTH MISSING")
+
+    return '\n'.join(lines)
 
 
 def write_paths_json():
@@ -1252,21 +1456,28 @@ def generate_vpy_script(config):
     """Generate VapourSynth script based on configuration."""
     lines = []
     lines.append('# -*- coding: utf-8 -*-')
+    lines.append('# ============================================================')
     lines.append('# VapourSynth Restoration Script')
-    lines.append(f'# Generated by VCG Deinterlacer {VERSION_STRING}')
+    lines.append(f'# VCG Deinterlacer {VERSION_STRING}')
     lines.append(f'# {AUTHOR_HANDLE}')
+    lines.append('# ============================================================')
     lines.append('')
     lines.append('import vapoursynth as vs')
     lines.append('from vapoursynth import core')
     lines.append('')
 
     # ── Explicit plugin loading (portable mode) ──────────────────────────────
-    # VapourSynth R73 portable autoloading is unreliable — the plugins64 dir
+    # VapourSynth R73 portable autoloading is unreliable — the plugins dir
     # is sometimes not found via the portable.vs mechanism.  Load every DLL
     # explicitly so we never depend on autoloading.  Failures are silently
     # ignored (already-loaded plugins, non-VS DLLs like libfftw3-3.dll, etc.).
-    plugins64_dir = os.path.join(VS_DEPS_DIR, 'plugins64')
-    if os.path.isdir(plugins64_dir):
+    # Support both plugins64\ and plugins\ directory names.
+    _plugin_dir_candidates = [
+        os.path.join(VS_DEPS_DIR, 'plugins64'),
+        os.path.join(VS_DEPS_DIR, 'plugins'),
+    ]
+    plugins64_dir = next((d for d in _plugin_dir_candidates if os.path.isdir(d)), None)
+    if plugins64_dir:
         # Use forward slashes — safe on Windows, avoids escape issues in vpy
         p64 = plugins64_dir.replace('\\', '/')
         lines.append('# Explicitly load all plugins from portable _deps (bypass autoloading)')
@@ -1280,9 +1491,18 @@ def generate_vpy_script(config):
         lines.append('            pass')
         lines.append('')
 
+    # Inject the bundled site-packages path so vspipe's embedded Python can
+    # find havsfunc.py, vsutil.py, etc. even if the _pth file is incomplete.
+    _site_pkg_dir = os.path.join(VS_DEPS_DIR, 'site-packages').replace('\\', '/')
+    lines.append('# Ensure bundled site-packages is on sys.path for havsfunc / vsutil')
+    lines.append('import sys as _vcg_sys')
+    lines.append(f'_vcg_sp = "{_site_pkg_dir}"')
+    lines.append('if _vcg_sp not in _vcg_sys.path:')
+    lines.append('    _vcg_sys.path.insert(0, _vcg_sp)')
+    lines.append('')
     lines.append('import havsfunc as haf')
     lines.append('')
-    
+
     # Determine frame rate based on video format
     video_format = config.get('format', 'ntsc')
     if video_format == 'ntsc':
@@ -2548,21 +2768,20 @@ class RestorationWizard(BaseWindow):
             "Welcome",         # 0  — hidden from breadcrumb
             "Select File",     # 1  → crumb 1
             "Source",          # 2  → crumb 2
-            "Y/C Delay",       # 3  → crumb 2  (SD only; skipped for DV)
-            "Crop",            # 4  → crumb 2
-            "Noise",           # 5  → crumb 3 "Advanced"
-            "Color Bleeding",  # 6  → crumb 3 "Advanced"
-            "Color Cast",      # 7  → crumb 3 "Advanced"
-            "Levels",          # 8  → crumb 3 "Advanced"
-            "Audio",           # 9  → crumb 3 "Advanced"
-            "Finalize",        # 10 → crumb 4
+            "Crop",            # 3  → crumb 2
+            "Y/C Delay",       # 4  → crumb 3 "Advanced" ①
+            "Noise",           # 5  → crumb 3 "Advanced" ②
+            "Color Cast",      # 6  → crumb 3 "Advanced" ③
+            "Levels",          # 7  → crumb 3 "Advanced" ④
+            "Audio",           # 8  → crumb 3 "Advanced" ⑤
+            "Finalize",        # 9  → crumb 4
         ]
         # Breadcrumb display groups: each entry = (label, [step_indices])
         self.crumbs = [
             ("Select File", [1]),
-            ("Source",      [2, 3, 4]),
-            ("Advanced",    [5, 6, 7, 8, 9]),
-            ("Finalize",    [10]),
+            ("Source",      [2, 3]),
+            ("Advanced",    [4, 5, 6, 7, 8]),
+            ("Finalize",    [9]),
         ]
         self.current_step = 0
         
@@ -2922,26 +3141,25 @@ class RestorationWizard(BaseWindow):
         # Update navigation buttons
         self.back_btn.set_disabled(step_index <= 1)
         # On the last advanced page, label the button to indicate Finalize is next
-        if step_index == 9:
+        if step_index == 8:
             self.next_btn.text = "Finalize →"
         else:
             self.next_btn.text = "Next →"
         self.next_btn.set_disabled(False)
         self.next_btn._draw()
 
-        # Show appropriate page (11-step navigation)
+        # Show appropriate page (10-step navigation)
         step_methods = [
             self._page_welcome,         # 0
             self._page_select_file,     # 1
             self._page_source_details,  # 2
-            self._page_yc_delay,        # 3  Y/C Delay (SD only)
-            self._page_crop_preset,     # 4  Crop Preset
-            self._page_noise,           # 5  Advanced ①
-            self._page_chroma,          # 6  Advanced ② Color Bleeding
-            self._page_color,           # 7  Advanced ③ Color Cast
-            self._page_levels,          # 8  Advanced ④
-            self._page_audio,           # 9  Advanced ⑤
-            self._page_finalize,        # 10
+            self._page_crop_preset,     # 3  Crop Preset
+            self._page_yc_delay,        # 4  Advanced ① Y/C Delay
+            self._page_noise,           # 5  Advanced ②
+            self._page_color,           # 6  Advanced ③ Color Cast
+            self._page_levels,          # 7  Advanced ④
+            self._page_audio,           # 8  Advanced ⑤
+            self._page_finalize,        # 9
         ]
 
         if step_index < len(step_methods):
@@ -2959,21 +3177,13 @@ class RestorationWizard(BaseWindow):
                 self._validate_batch_types(files, on_ok=lambda: self._show_step(2))
                 return
 
-        # ── Step 2: Source Details → Y/C Delay (SD) or Crop (DV) ─────────────
+        # ── Step 2: Source Details → Crop ────────────────────────────────────
         if self.current_step == 2:
-            if self.config_data.get('capture_method') == 'sd':
-                self._show_step(3)  # Y/C Delay
-            else:
-                self._show_step(4)  # Skip Y/C for DV; go to Crop
+            self._show_step(3)
             return
 
-        # ── Step 3: Y/C Delay → Crop ──────────────────────────────────────────
+        # ── Step 3: Crop → "Process Now or Advanced?" ────────────────────────
         if self.current_step == 3:
-            self._show_step(4)
-            return
-
-        # ── Step 4: Crop → "Process Now or Advanced?" ─────────────────────────
-        if self.current_step == 4:
             self._ask_basic_or_advanced()
             return
 
@@ -2985,8 +3195,8 @@ class RestorationWizard(BaseWindow):
 
     def _ask_basic_or_advanced(self):
         """After Crop, let the user choose to process now or configure advanced options."""
-        finalize_step = 10  # "Finalize" in the 11-step list
-        advanced_step = 5   # First advanced page ("Noise")
+        finalize_step = 9  # "Finalize" in the 10-step list
+        advanced_step = 4  # First advanced page ("Y/C Delay")
 
         dlg = tk.Toplevel(self)
         dlg.title("Ready to process?")
@@ -3006,7 +3216,7 @@ class RestorationWizard(BaseWindow):
                  font=('Segoe UI', 16, 'bold'), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
         tk.Label(f,
                  text="You can process now using just deinterlacing, or continue to configure "
-                      "optional enhancements (noise removal, color analysis, levels, audio).",
+                      "optional enhancements (Y/C delay, noise removal, color analysis, levels, audio).",
                  font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
                  wraplength=490, justify='left').pack(anchor='w', pady=(8, 20))
 
@@ -3041,7 +3251,7 @@ class RestorationWizard(BaseWindow):
         adv_btn = tk.Frame(btn_row, bg=Colors.BG_CARD, cursor='hand2')
         adv_btn.pack(fill='x', ipady=8)
         adv_lbl = tk.Label(adv_btn,
-                           text="⚙   Advanced Options  (noise removal, color, levels, audio)",
+                           text="⚙   Advanced Options  (Y/C delay, noise removal, color, levels, audio)",
                            font=('Segoe UI', 11), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD, cursor='hand2')
         adv_lbl.pack()
         adv_btn.bind('<Button-1>', lambda e: go_advanced())
@@ -3102,11 +3312,7 @@ class RestorationWizard(BaseWindow):
 
     def _prev_step(self):
         if self.current_step > 0:
-            target = self.current_step - 1
-            # Skip Y/C Delay (step 3) when going back if capture is DV
-            if target == 3 and self.config_data.get('capture_method') != 'sd':
-                target = 2
-            self._show_step(target)
+            self._show_step(self.current_step - 1)
     
     # ==================== STEP PAGES ====================
     
@@ -3603,7 +3809,7 @@ class RestorationWizard(BaseWindow):
     # ══════════════════════════════════════════════════════════════════════════
 
     def _page_yc_delay(self):
-        """Step 3 — Y/C Delay (chroma horizontal shift) per file."""
+        """Step 4 (Advanced ①) — Y/C Delay (chroma horizontal shift) per file."""
         files = self.config_data.get('input_files', [])
         if not files and 'input_path' in self.config_data:
             files = [self.config_data['input_path']]
@@ -3816,31 +4022,38 @@ class RestorationWizard(BaseWindow):
             loading_lbl.config(text=f"Preview error: {exc}")
 
     def _update_yc_zoom(self, zoom_canvas, src_img, yc_delay):
-        """Render the zoom region with simulated chroma shift."""
+        """Render the zoom region with simulated chroma shift.
+
+        Uses PIL ImageChops.offset (no numpy required).  Numpy is used when
+        available for a marginally faster roll, but PIL alone is sufficient.
+        """
         if not HAS_PIL:
             return
         try:
-            import numpy as np
+            from PIL import ImageChops
             w, h = src_img.size
             # Crop centre 30% width × 50% height
             cw, ch = max(80, w // 3), max(60, h // 2)
             cx, cy = w // 2, h // 2
             region = src_img.crop((cx - cw // 2, cy - ch // 2,
                                    cx + cw // 2, cy + ch // 2))
-            # Simulate chroma shift in YCbCr
+            # Simulate chroma shift: split YCbCr, offset Cb and Cr horizontally
             ycbcr = region.convert('YCbCr')
-            arr = np.array(ycbcr, dtype=np.uint8)
+            y_ch, cb_ch, cr_ch = ycbcr.split()
             if yc_delay != 0:
-                arr[:, :, 1] = np.roll(arr[:, :, 1], yc_delay, axis=1)
-                arr[:, :, 2] = np.roll(arr[:, :, 2], yc_delay, axis=1)
-            shifted = Image.fromarray(arr, 'YCbCr').convert('RGB')
+                cb_ch = ImageChops.offset(cb_ch, yc_delay, 0)
+                cr_ch = ImageChops.offset(cr_ch, yc_delay, 0)
+            shifted = Image.merge('YCbCr', (y_ch, cb_ch, cr_ch)).convert('RGB')
             zoom = shifted.resize((280, 240), Image.NEAREST)
             photo = ImageTk.PhotoImage(zoom)
             zoom_canvas._vcg_photo = photo
             zoom_canvas.delete('all')
             zoom_canvas.create_image(140, 120, image=photo)
-        except Exception:
-            pass  # numpy may not be available; zoom just stays blank
+        except Exception as _e:
+            zoom_canvas.delete('all')
+            zoom_canvas.create_text(140, 120, text=f"Zoom error: {_e}",
+                                    fill=Colors.TEXT_SECONDARY,
+                                    font=('Segoe UI', 9), width=260)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 4 — CROP PRESET  (Features 3 & 4)
@@ -5024,243 +5237,6 @@ class RestorationWizard(BaseWindow):
         
         self.noise_var.trace_add('write', lambda *_: self.config_data.update({'noise_level': self.noise_var.get()}))
     
-    def _page_chroma(self):
-        tk.Label(self.page_container, text="Color Bleeding",
-                font=('Segoe UI', 22, 'bold'),
-                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
-
-        self._show_artifact_example(self.page_container, 'chroma',
-            "What color bleeding looks like — colors smearing horizontally from composite video:")
-        self._show_experimental_notice(self.page_container)
-
-        # Check if multiple files selected
-        num_files = len(self.config_data.get('input_files', []))
-        if num_files > 1:
-            # For batch processing, show simple options without analysis
-            tk.Label(self.page_container, text="Select color bleeding fix for all files",
-                    font=('Segoe UI', 12),
-                    fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(4, 20))
-            
-            initial_chroma = 'yes' if self.config_data.get('chroma_shift') else 'no'
-            self.config_data['chroma_shift'] = (initial_chroma == 'yes')
-            self.chroma_var = tk.StringVar(value=initial_chroma)
-            
-            card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
-            card.pack(fill='x')
-            
-            ModernRadioButton(card, "No color bleeding fix", self.chroma_var, "no",
-                             "Colors look properly aligned").pack(fill='x')
-            ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
-            ModernRadioButton(card, "Yes, fix color bleeding", self.chroma_var, "yes",
-                             "Colors appear smeared or shifted sideways").pack(fill='x')
-            
-            self.chroma_var.trace_add('write', lambda *_: self.config_data.update({'chroma_shift': self.chroma_var.get() == 'yes'}))
-            return
-        
-        # Single file - show analysis with progress indicator
-        
-        # Progress indicator card (prominent)
-        self.chroma_progress_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=20, pady=20)
-        self.chroma_progress_card.pack(fill='x', pady=(10, 0))
-        
-        # Spinner animation
-        self.chroma_spinner_label = tk.Label(self.chroma_progress_card, text="⏳",
-                font=('Segoe UI', 28),
-                fg=Colors.ACCENT, bg=Colors.BG_CARD)
-        self.chroma_spinner_label.pack()
-        
-        self.chroma_status_label = tk.Label(self.chroma_progress_card, 
-                text="Analyzing color bleeding...",
-                font=('Segoe UI', 12, 'bold'),
-                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD)
-        self.chroma_status_label.pack(pady=(10, 5))
-        
-        self.chroma_progress_label = tk.Label(self.chroma_progress_card, 
-                text="Sampling frame 1 of 10",
-                font=('Segoe UI', 12),
-                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD)
-        self.chroma_progress_label.pack()
-        
-        self.chroma_detail_label = tk.Label(self.chroma_progress_card, 
-                text="Checking chroma channel spread for bleeding artifacts",
-                font=('Segoe UI', 9, 'italic'),
-                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD)
-        self.chroma_detail_label.pack(pady=(10, 0))
-        
-        # Analysis results frame (hidden until analysis complete)
-        self.chroma_results_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
-        self.chroma_results_frame.pack(fill='x')
-        
-        # Options frame (populated after analysis)
-        self.chroma_options_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
-        self.chroma_options_frame.pack(fill='x', pady=(10, 0))
-        
-        # Get initial value
-        initial_chroma = 'yes' if self.config_data.get('chroma_shift') else 'no'
-        self.config_data['chroma_shift'] = (initial_chroma == 'yes')
-        self.chroma_var = tk.StringVar(value=initial_chroma)
-        
-        # Disable Next button during analysis
-        self.chroma_analysis_complete = False
-        if hasattr(self, 'next_btn'):
-            self.next_btn.configure(state='disabled')
-        
-        # Start spinner animation
-        self._animate_chroma_spinner()
-        
-        # Run analysis in thread
-        threading.Thread(target=self._run_chroma_analysis, daemon=True).start()
-    
-    def _animate_chroma_spinner(self):
-        """Animate the spinner during analysis."""
-        if not hasattr(self, 'chroma_analysis_complete') or self.chroma_analysis_complete:
-            return
-        
-        if not hasattr(self, 'chroma_spinner_label') or not self.chroma_spinner_label.winfo_exists():
-            return
-            
-        spinners = ['⏳', '⌛']
-        current = self.chroma_spinner_label.cget('text')
-        next_idx = (spinners.index(current) + 1) % len(spinners) if current in spinners else 0
-        self.chroma_spinner_label.config(text=spinners[next_idx])
-        
-        self.after(500, self._animate_chroma_spinner)
-    
-    def _update_chroma_progress(self, current, total):
-        """Update the chroma analysis progress indicator."""
-        if hasattr(self, 'chroma_progress_label') and self.chroma_progress_label.winfo_exists():
-            self.after(0, lambda: self.chroma_progress_label.config(
-                text=f"Sampling frame {current} of {total}"))
-    
-    def _run_chroma_analysis(self):
-        if 'input_path' not in self.config_data:
-            self.after(0, self._finish_chroma_analysis_error, "❌ No file selected")
-            return
-        
-        try:
-            # Run color bleeding analysis with progress callback
-            bleed_data = analyze_color_bleeding(
-                self.config_data['input_path'],
-                sample_frames=10,
-                progress_callback=self._update_chroma_progress
-            )
-            
-            if bleed_data and bleed_data.get('analyzed'):
-                self.config_data['bleed_data'] = bleed_data
-                self.after(0, lambda: self._show_chroma_results(bleed_data))
-            else:
-                self.after(0, self._finish_chroma_analysis_error, "Could not analyze color bleeding")
-        except Exception as e:
-            self.after(0, self._finish_chroma_analysis_error, f"Analysis error: {str(e)[:30]}")
-    
-    def _finish_chroma_analysis_error(self, message):
-        """Handle analysis error - show message and fallback options."""
-        self.chroma_analysis_complete = True
-        if hasattr(self, 'next_btn'):
-            self.next_btn.configure(state='normal')
-        
-        # Hide progress card
-        if hasattr(self, 'chroma_progress_card'):
-            self.chroma_progress_card.pack_forget()
-        
-        # Show error
-        error_label = tk.Label(self.chroma_results_frame, text=message,
-                font=('Segoe UI', 12),
-                fg=Colors.ERROR, bg=Colors.BG_MAIN)
-        error_label.pack(anchor='w', pady=(0, 10))
-        
-        self._show_chroma_options_fallback()
-    
-    def _show_chroma_results(self, data):
-        """Display chroma analysis results."""
-        # Mark analysis complete and re-enable Next button
-        self.chroma_analysis_complete = True
-        if hasattr(self, 'next_btn'):
-            self.next_btn.configure(state='normal')
-        
-        # Hide progress card
-        if hasattr(self, 'chroma_progress_card'):
-            self.chroma_progress_card.pack_forget()
-        
-        # Show analysis results
-        result_card = tk.Frame(self.chroma_results_frame, bg=Colors.BG_CARD, padx=15, pady=12)
-        result_card.pack(fill='x')
-        
-        tk.Label(result_card, text="🎨 Color Bleeding Analysis",
-                font=('Segoe UI', 10, 'bold'),
-                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w')
-        
-        # Level indicator
-        level = data.get('bleed_level', 'unknown')
-        desc = data.get('bleed_desc', 'Unknown')
-        
-        if level == 'significant':
-            icon = "🔴"
-            color = Colors.ERROR
-        elif level == 'moderate':
-            icon = "🟠"
-            color = Colors.WARNING
-        elif level == 'light':
-            icon = "🟡"
-            color = Colors.WARNING
-        else:
-            icon = "🟢"
-            color = Colors.SUCCESS
-        
-        tk.Label(result_card, text=f"{icon} {desc}",
-                font=('Segoe UI', 12),
-                fg=color, bg=Colors.BG_CARD).pack(anchor='w', pady=(3, 0))
-        
-        # Technical details
-        samples = data.get('samples_analyzed', 0)
-        score = data.get('bleeding_score', 0)
-        tech_text = f"Analyzed {samples} samples  •  Chroma spread score: {score:.1f}"
-        tk.Label(result_card, text=tech_text,
-                font=('Segoe UI', 12),
-                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(anchor='w', pady=(2, 0))
-        
-        # Recommendation
-        recommendation = data.get('recommendation', False)
-        if recommendation:
-            rec_text = "💡 Recommendation: Fix color bleeding"
-            self.chroma_var.set('yes')
-        else:
-            rec_text = "💡 Recommendation: No fix needed"
-            self.chroma_var.set('no')
-        
-        tk.Label(result_card, text=rec_text,
-                font=('Segoe UI', 10, 'bold'),
-                fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(anchor='w', pady=(10, 0))
-        
-        # Show options
-        self._show_chroma_options()
-    
-    def _show_chroma_options_fallback(self):
-        """Show basic chroma options without analysis."""
-        card = tk.Frame(self.chroma_options_frame, bg=Colors.BG_CARD)
-        card.pack(fill='x')
-        
-        ModernRadioButton(card, "No color bleeding fix", self.chroma_var, "no",
-                         "Colors look properly aligned").pack(fill='x')
-        ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
-        ModernRadioButton(card, "Yes, fix color bleeding", self.chroma_var, "yes",
-                         "Colors appear smeared or shifted sideways").pack(fill='x')
-        
-        self.chroma_var.trace_add('write', lambda *_: self.config_data.update({'chroma_shift': self.chroma_var.get() == 'yes'}))
-    
-    def _show_chroma_options(self):
-        """Show chroma options."""
-        card = tk.Frame(self.chroma_options_frame, bg=Colors.BG_CARD)
-        card.pack(fill='x', pady=(10, 0))
-        
-        ModernRadioButton(card, "No color bleeding fix", self.chroma_var, "no",
-                         "Keep original colors").pack(fill='x')
-        ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
-        ModernRadioButton(card, "Yes, fix color bleeding", self.chroma_var, "yes",
-                         "Shift chroma to correct horizontal bleeding").pack(fill='x')
-        
-        self.chroma_var.trace_add('write', lambda *_: self.config_data.update({'chroma_shift': self.chroma_var.get() == 'yes'}))
-    
     def _page_dropouts(self):
         tk.Label(self.page_container, text="Dropout Removal",
                 font=('Segoe UI', 22, 'bold'),
@@ -5700,24 +5676,24 @@ class RestorationWizard(BaseWindow):
         card = tk.Frame(self.levels_options_frame, bg=Colors.BG_CARD)
         card.pack(fill='x')
         
-        ModernRadioButton(card, "No adjustment", self.levels_var, "none",
-                         "Leave levels as-is").pack(fill='x')
+        ModernRadioButton(card, "No adjustment — recommended", self.levels_var, "none",
+                         "Preserves all captured data including super-whites and super-blacks").pack(fill='x')
         ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
         
-        # Add "(recommended)" to clamp if adjustment needed
+        # Add note to clamp option; do NOT auto-recommend it — clamping discards
+        # super-white/super-black data that is often genuine picture content on
+        # analog tape captures and cannot be recovered after encoding.
         clamp_label = "Clamp to legal (16-235)"
-        if data['needs_adjustment']:
-            clamp_label = "Clamp to legal (16-235) — recommended"
         ModernRadioButton(card, clamp_label, self.levels_var, "clamp",
-                         "Clips extreme values, preserves contrast").pack(fill='x')
+                         "Clips values outside 16-235 — use only if broadcast compliance is required").pack(fill='x')
         ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
         ModernRadioButton(card, "Stretch to legal", self.levels_var, "stretch",
                          "Compresses full range, may reduce contrast").pack(fill='x')
         
-        if data['needs_adjustment']:
-            self.levels_var.set('clamp')
-            # Save immediately since trace_add hasn't been set yet
-            self.config_data['levels_adjustment'] = 'clamp'
+        # Always default to 'none' — clamping permanently loses data.
+        # The analysis result is shown for information; user decides.
+        self.levels_var.set('none')
+        self.config_data['levels_adjustment'] = 'none'
         
         self.levels_var.trace_add('write', lambda *_: self.config_data.update({'levels_adjustment': self.levels_var.get()}))
         
@@ -5730,10 +5706,14 @@ class RestorationWizard(BaseWindow):
                 fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(anchor='w')
         
         help_text = (
-            "Clamp: Best for most analog/DV captures. Out-of-range values are usually "
-            "noise or artifacts, not real picture detail. Preserves the original contrast.\n\n"
-            "Stretch: Use only if the video was incorrectly captured at full range (0-255) "
-            "when it should have been studio range. Keeps all detail but reduces contrast."
+            "No adjustment: Recommended for analog captures. Preserves every value the "
+            "capture card recorded — super-whites and super-blacks are often real picture "
+            "content on VHS/Hi8 tape, not noise.\n\n"
+            "Clamp: Permanently discards values outside 16-235. Only use this if you "
+            "specifically need broadcast-legal output and have confirmed the out-of-range "
+            "values are noise.\n\n"
+            "Stretch: Compresses the full 0-255 range into 16-235. Use only if the video "
+            "was captured at full range by mistake."
         )
         tk.Label(help_frame, text=help_text,
                 font=('Segoe UI', 12),
@@ -6517,7 +6497,7 @@ class RestorationWizard(BaseWindow):
                 diag.section("Detected Parameters / Settings")
                 _diag_keys = [
                     'video_format', 'field_order', 'capture_method', 'crop_preset',
-                    'yc_delay', 'ivtc_mode', 'noise_level', 'chroma_bleeding_level',
+                    'yc_delay', 'ivtc_mode', 'noise_level',
                     'color_cast_correction', 'levels_correction', 'audio_mode',
                     'output_format', 'par_correction', 'mix_audio', 'save_diagnostic_log',
                 ]
@@ -6657,14 +6637,135 @@ class RestorationWizard(BaseWindow):
         vspipe_cmd = [VSPIPE_PATH, '-c', 'y4m', str(script_path), temp_y4m]
         # Pass portable Python/plugin environment when using bundled deps
         _vs_env = get_vspipe_env()
+        # cwd=VS_DEPS_DIR ensures Windows DLL search starts from the VS folder,
+        # which is especially important for side-by-side DLL loading on Win10+.
+        _vs_cwd = VS_DEPS_DIR if (os.path.isdir(VS_DEPS_DIR) and _vs_env) else None
 
         if diag:
             diag.section("Step 2: VapourSynth Processing")
+            diag.kv("VSPIPE_PATH", VSPIPE_PATH)
+            diag.kv("vspipe exists", str(os.path.exists(VSPIPE_PATH)))
+            diag.kv("vspipe cwd", str(_vs_cwd))
+            _deps_info = _collect_vs_deps_diagnostic()
+            diag.raw(_deps_info)
             diag.cmd(vspipe_cmd)
             diag.timing("vspipe start")
 
         result = run_hidden(vspipe_cmd, timeout=None,
-                            **({'env': _vs_env} if _vs_env else {}))
+                            **({'env': _vs_env} if _vs_env else {}),
+                            **({'cwd': _vs_cwd} if _vs_cwd else {}))
+
+        # ── Retry chain for "Failed to initialize VSScript" ─────────────────
+        # Root cause: the bundled VapourSynth R73 vsscript.dll only knows how
+        # to find Python 3.8–3.12. With Python 3.14 it never finds a DLL.
+        #
+        # Retry 1: same vspipe, system PATH (no custom env).
+        # Retry 2: pip-installed vspipe.exe if available (R74+, Python 3.14 native).
+        # Retry 3: run the .vpy script directly via Python + pip vapoursynth,
+        #          bypassing vspipe.exe and vsscript.dll entirely.
+        _init_failed = ('Failed to initialize VSScript' in (result.stderr or ''))
+
+        if result.returncode != 0 and _vs_env and _init_failed:
+            self._log("  Portable env init failed — retrying with system environment...")
+            if diag:
+                diag.captured("vspipe-attempt-1", result.stdout, result.stderr)
+                diag.kv("vspipe-retry-1", "init failed with portable env, retrying system env")
+                diag.cmd(vspipe_cmd)
+            result = run_hidden(vspipe_cmd, timeout=None,
+                                **({'cwd': _vs_cwd} if _vs_cwd else {}))
+
+        # Retry 2: pip-installed vspipe.exe (VapourSynth R74+, Python 3.14 native).
+        _init_failed2 = ('Failed to initialize VSScript' in (result.stderr or ''))
+        if result.returncode != 0 and _init_failed2 and _PIP_VSPIPE and _PIP_VSPIPE != VSPIPE_PATH:
+            self._log(f"  Trying pip-installed vspipe: {_PIP_VSPIPE}")
+            pip_cmd = [_PIP_VSPIPE, '-c', 'y4m', str(script_path), temp_y4m]
+            if diag:
+                diag.captured("vspipe-attempt-2", result.stdout, result.stderr)
+                diag.kv("vspipe-retry-2", f"trying pip vspipe at {_PIP_VSPIPE}")
+                diag.cmd(pip_cmd)
+            result = run_hidden(pip_cmd, timeout=None)
+
+        # Retry 3: Python-direct — execute the .vpy script via sys.executable
+        # with pip-installed vapoursynth.  This bypasses vspipe.exe and
+        # vsscript.dll entirely, avoiding the Python version incompatibility.
+        _init_failed3 = ('Failed to initialize VSScript' in (result.stderr or ''))
+        if result.returncode != 0 and _init_failed3:
+            _has_pip_vs = False
+            _pip_pkg_dir = ''
+            try:
+                import importlib.util as _ilu
+                _spec = _ilu.find_spec('vapoursynth')
+                if _spec and _spec.origin:
+                    _has_pip_vs = True
+                    _pip_pkg_dir = os.path.dirname(_spec.origin)
+            except Exception:
+                pass
+
+            if _has_pip_vs:
+                self._log("  Trying Python-direct fallback (bypassing vspipe/vsscript)...")
+                _site_pkg  = os.path.join(VS_DEPS_DIR, 'site-packages')
+                _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins64')
+                if not os.path.isdir(_plugins64):
+                    _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins')
+
+                # Wrapper: import pip vapoursynth first, then exec the .vpy script.
+                # IMPORTANT: sys.path.append (not insert) — the pip vapoursynth.pyd
+                # lives in the standard site-packages and must be found BEFORE the
+                # bundled vapoursynth.pyd in _deps/vs/site-packages/.  We only append
+                # _site_pkg so that havsfunc.py and vsutil there are still importable.
+                # Python 3.8+ on Windows uses os.add_dll_directory() for DLL
+                # resolution — PATH is no longer searched for DLLs loaded by
+                # extension modules.  We must call add_dll_directory() so the
+                # VapourSynth plugin DLLs can find their dependencies
+                # (libfftw3*.dll, vapoursynth.dll, etc.) at LoadPlugin time.
+                _wrapper = '\n'.join([
+                    'import sys, os',
+                    # Register DLL search dirs BEFORE importing vapoursynth so
+                    # any DLL it loads can find its own dependencies.
+                    f'for _dll_dir in [{repr(VS_DEPS_DIR)}, {repr(_plugins64)}, {repr(_pip_pkg_dir)}]:',
+                    '    if os.path.isdir(_dll_dir) and hasattr(os, "add_dll_directory"):',
+                    '        os.add_dll_directory(_dll_dir)',
+                    f'sys.path.append({repr(_site_pkg)})',
+                    'import vapoursynth as vs  # pip-installed, Python 3.14 compatible',
+                    f'with open({repr(str(script_path))}, "r", encoding="utf-8") as _f:',
+                    '    _code = _f.read()',
+                    f'exec(compile(_code, {repr(str(script_path))}, "exec"))',
+                    # vs.get_output(0) returns VideoOutputTuple(clip, alpha, alt_output)
+                    # in newer VapourSynth API — extract .clip to get the VideoNode.
+                    '_result = vs.get_output(0)',
+                    '_node = _result.clip if hasattr(_result, "clip") else _result',
+                    f'with open({repr(temp_y4m)}, "wb") as _out:',
+                    '    _node.output(_out, y4m=True)',
+                ])
+                _py_cmd = [sys.executable, '-c', _wrapper]
+
+                # Env: keep Python env vars intact (Python 3.14 needs them).
+                # PATH order:
+                #   1. VS_DEPS_DIR  — bundled vapoursynth.dll, libfftw3*.dll,
+                #                    python3.dll and other DLL deps plugins need
+                #   2. _plugins64   — the plugin DLLs themselves (needed by each other)
+                #   3. _pip_pkg_dir — pip vapoursynth.dll (already loaded in memory)
+                # VS_DEPS_DIR must come first so plugins find the correct
+                # companion DLLs (libfftw3, etc.) that live alongside vspipe.
+                _py_env = os.environ.copy()
+                _py_env['PATH'] = (VS_DEPS_DIR + os.pathsep
+                                   + _plugins64 + os.pathsep
+                                   + _pip_pkg_dir + os.pathsep
+                                   + _py_env.get('PATH', ''))
+
+                if diag:
+                    diag.captured("vspipe-attempt-3", result.stdout, result.stderr)
+                    diag.kv("vspipe-retry-3",
+                            f"Python-direct: {sys.executable} (pip vapoursynth at {_pip_pkg_dir})")
+                    diag.raw(f"wrapper script:\n{_wrapper}")
+
+                result = run_hidden(_py_cmd, timeout=None, env=_py_env)
+
+                if diag:
+                    diag.captured("python-direct-result", result.stdout, result.stderr)
+                    diag.kv("python-direct-returncode", str(result.returncode))
+            else:
+                self._log("  pip vapoursynth not found — cannot use Python-direct fallback.")
 
         if result.returncode != 0:
             err_text = (result.stderr or result.stdout or "").strip()
@@ -6673,16 +6774,44 @@ class RestorationWizard(BaseWindow):
                 diag.captured("vspipe", result.stdout, result.stderr)
                 diag.kv("vspipe", f"FAILED (returncode={result.returncode})")
                 diag.close(success=False)
-            # Show the actual vspipe error so the user can report it
+
+            # Detect the Python/VapourSynth version incompatibility specifically.
+            _is_vsscript_fail = 'Failed to initialize VSScript' in err_text
+            _bundled_py_ver = 'unknown'
+            try:
+                for _f in os.listdir(VS_DEPS_DIR):
+                    if _f.lower().startswith('python3') and _f.lower().endswith('._pth'):
+                        _bundled_py_ver = _f[6:-4]   # e.g. "314"
+                        break
+            except Exception:
+                pass
+            _sys_py_ver = f"{sys.version_info.major}{sys.version_info.minor}"
+
             def _show_vs_err():
                 import tkinter.messagebox as _mb
-                short = err_text[:1200] if len(err_text) > 1200 else err_text
-                _mb.showerror(
-                    "VapourSynth Error",
-                    "vspipe failed to process the video.\n\n"
-                    "Error details:\n" + (short if short else "(no output captured)"),
-                    parent=self.winfo_toplevel() if self.winfo_exists() else None
-                )
+                if _is_vsscript_fail:
+                    msg = (
+                        "VapourSynth failed to start (VSScript init error).\n\n"
+                        f"Your system Python is "
+                        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}.\n"
+                        "The bundled VapourSynth R73 only supports Python 3.8–3.12.\n\n"
+                        "The app tried all fallback methods. To fix, run this in a terminal "
+                        "and restart the app:\n\n"
+                        "    pip install vapoursynth\n\n"
+                        "This is installed automatically on first run. If you see this\n"
+                        "message, pip may have failed or the package was removed.\n\n"
+                        "You do NOT need to delete _deps or change your Python version."
+                    )
+                    _mb.showerror("VapourSynth Version Incompatibility", msg,
+                                  parent=self.winfo_toplevel() if self.winfo_exists() else None)
+                else:
+                    short = err_text[:1200] if len(err_text) > 1200 else err_text
+                    _mb.showerror(
+                        "VapourSynth Error",
+                        "vspipe failed to process the video.\n\n"
+                        "Error details:\n" + (short if short else "(no output captured)"),
+                        parent=self.winfo_toplevel() if self.winfo_exists() else None
+                    )
             self.after(0, _show_vs_err)
             # Clean up temp audio if it exists
             try:
@@ -7308,6 +7437,27 @@ class FirstRunSetupWindow(tk.Tk):
 
     # ── Main orchestration ───────────────────────────────────────
 
+    def _pip_install_packages(self, packages):
+        """Install Python packages via pip during first-run setup.
+
+        Installs Pillow (image previews) and vapoursynth (video processing).
+        Failures are logged but do not block setup — the app degrades gracefully.
+        """
+        self._set_status("Installing Python dependencies…")
+        self._log_line("")
+        self._log_line(f"Installing Python packages: {', '.join(packages)}")
+        try:
+            cmd = [sys.executable, '-m', 'pip', 'install',
+                   '--quiet', '--disable-pip-version-check'] + packages
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            if result.returncode == 0:
+                self._log_line("  ✔ Python packages installed.")
+            else:
+                err = (result.stderr or result.stdout or '').strip()[:400]
+                self._log_line(f"  ✘ pip install failed (non-fatal): {err}")
+        except Exception as e:
+            self._log_line(f"  ✘ pip install error (non-fatal): {e}")
+
     def _run_setup(self):
         global FFMPEG_PATH, FFPROBE_PATH, VSPIPE_PATH
 
@@ -7345,6 +7495,11 @@ class FirstRunSetupWindow(tk.Tk):
         FFPROBE_PATH = os.path.join(DEPS_DIR, 'ffmpeg', 'ffprobe.exe')
         VSPIPE_PATH  = os.path.join(DEPS_DIR, 'vs', 'vspipe.exe')
         write_paths_json()
+
+        # Install Python packages: Pillow for image previews, vapoursynth for
+        # Python-direct fallback processing when the bundled R73 vsscript.dll
+        # cannot find the user's Python (e.g. Python 3.13/3.14 with R73).
+        self._pip_install_packages(['Pillow', 'numpy', 'tkinterdnd2', 'vapoursynth'])
 
         self._set_status("Setup complete — launching VCG Deinterlacer…")
         self._log_line("")
@@ -7409,6 +7564,22 @@ if __name__ == '__main__':
             )
             _r.destroy()
         else:
+            # ── Re-import optional packages installed by setup ────
+            if not HAS_PIL:
+                try:
+                    from PIL import Image, ImageTk  # noqa: F811,F401
+                    HAS_PIL = True  # noqa: F811
+                    print("[VCG Diag] PIL re-imported after setup install.")
+                except ImportError:
+                    pass
+            if not HAS_DND:
+                try:
+                    from tkinterdnd2 import DND_FILES, TkinterDnD  # noqa: F811,F401
+                    HAS_DND = True  # noqa: F811
+                    print("[VCG Diag] tkinterdnd2 re-imported after setup install.")
+                except Exception:
+                    pass
+
             # ── Main wizard ──────────────────────────────────────
             app = RestorationWizard()
             app.mainloop()
