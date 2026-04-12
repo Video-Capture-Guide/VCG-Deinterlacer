@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "Beta-06"
-BUILD_DATE = "2026-04-12c"
+BUILD_DATE = "2026-04-12d"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -6742,13 +6742,14 @@ class RestorationWizard(BaseWindow):
                 if _is_vsscript_fail:
                     msg = (
                         "VapourSynth failed to start (VSScript init error).\n\n"
-                        f"Your system Python is 3.{sys.version_info.minor} "
-                        f"(Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}).\n"
+                        f"Your system Python is "
+                        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}.\n"
                         "The bundled VapourSynth R73 only supports Python 3.8–3.12.\n\n"
-                        "To fix — run this command in a terminal, then restart the app:\n\n"
+                        "The app tried all fallback methods. To fix, run this in a terminal "
+                        "and restart the app:\n\n"
                         "    pip install vapoursynth\n\n"
-                        "VapourSynth R74+ supports Python 3.12–3.14 and will be\n"
-                        "detected automatically on the next processing attempt.\n\n"
+                        "This is installed automatically on first run. If you see this\n"
+                        "message, pip may have failed or the package was removed.\n\n"
                         "You do NOT need to delete _deps or change your Python version."
                     )
                     _mb.showerror("VapourSynth Version Incompatibility", msg,
@@ -7386,6 +7387,27 @@ class FirstRunSetupWindow(tk.Tk):
 
     # ── Main orchestration ───────────────────────────────────────
 
+    def _pip_install_packages(self, packages):
+        """Install Python packages via pip during first-run setup.
+
+        Installs Pillow (image previews) and vapoursynth (video processing).
+        Failures are logged but do not block setup — the app degrades gracefully.
+        """
+        self._set_status("Installing Python dependencies…")
+        self._log_line("")
+        self._log_line(f"Installing Python packages: {', '.join(packages)}")
+        try:
+            cmd = [sys.executable, '-m', 'pip', 'install',
+                   '--quiet', '--disable-pip-version-check'] + packages
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            if result.returncode == 0:
+                self._log_line("  ✔ Python packages installed.")
+            else:
+                err = (result.stderr or result.stdout or '').strip()[:400]
+                self._log_line(f"  ✘ pip install failed (non-fatal): {err}")
+        except Exception as e:
+            self._log_line(f"  ✘ pip install error (non-fatal): {e}")
+
     def _run_setup(self):
         global FFMPEG_PATH, FFPROBE_PATH, VSPIPE_PATH
 
@@ -7423,6 +7445,11 @@ class FirstRunSetupWindow(tk.Tk):
         FFPROBE_PATH = os.path.join(DEPS_DIR, 'ffmpeg', 'ffprobe.exe')
         VSPIPE_PATH  = os.path.join(DEPS_DIR, 'vs', 'vspipe.exe')
         write_paths_json()
+
+        # Install Python packages: Pillow for image previews, vapoursynth for
+        # Python-direct fallback processing when the bundled R73 vsscript.dll
+        # cannot find the user's Python (e.g. Python 3.13/3.14 with R73).
+        self._pip_install_packages(['Pillow', 'vapoursynth'])
 
         self._set_status("Setup complete — launching VCG Deinterlacer…")
         self._log_line("")
@@ -7487,6 +7514,16 @@ if __name__ == '__main__':
             )
             _r.destroy()
         else:
+            # ── Re-import PIL if it was just installed by setup ───
+            # (HAS_PIL was False at startup; pip may have fixed that)
+            if not HAS_PIL:
+                try:
+                    from PIL import Image, ImageTk  # noqa: F811,F401
+                    HAS_PIL = True  # noqa: F811
+                    print("[VCG Diag] PIL re-imported after setup install.")
+                except ImportError:
+                    pass
+
             # ── Main wizard ──────────────────────────────────────
             app = RestorationWizard()
             app.mainloop()
