@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "Beta-06"
-BUILD_DATE = "2026-04-12f"
+BUILD_DATE = "2026-04-12g"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -106,14 +106,27 @@ try:
 except ImportError:
     HAS_PIL = False
 
-# Check for tkinterdnd2 for drag and drop
+# Check for tkinterdnd2 for drag and drop.
 # Catch all exceptions, not just ImportError — in a Nuitka onefile build the
 # tkdnd DLL can fail to load with OSError after a successful import.
+# On a fresh machine tkinterdnd2 may not be installed yet.  We attempt a
+# silent pip install here (before BaseWindow is defined) so that the first
+# run after setup gets DnD support without requiring a restart.
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
     HAS_DND = True
 except Exception:
-    HAS_DND = False
+    try:
+        import subprocess as _sp
+        _sp.run(
+            [sys.executable, '-m', 'pip', 'install', 'tkinterdnd2',
+             '--quiet', '--disable-pip-version-check'],
+            capture_output=True, timeout=60
+        )
+        from tkinterdnd2 import DND_FILES, TkinterDnD
+        HAS_DND = True
+    except Exception:
+        HAS_DND = False
 
 # ============================================================
 # Configuration
@@ -5654,24 +5667,24 @@ class RestorationWizard(BaseWindow):
         card = tk.Frame(self.levels_options_frame, bg=Colors.BG_CARD)
         card.pack(fill='x')
         
-        ModernRadioButton(card, "No adjustment", self.levels_var, "none",
-                         "Leave levels as-is").pack(fill='x')
+        ModernRadioButton(card, "No adjustment — recommended", self.levels_var, "none",
+                         "Preserves all captured data including super-whites and super-blacks").pack(fill='x')
         ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
         
-        # Add "(recommended)" to clamp if adjustment needed
+        # Add note to clamp option; do NOT auto-recommend it — clamping discards
+        # super-white/super-black data that is often genuine picture content on
+        # analog tape captures and cannot be recovered after encoding.
         clamp_label = "Clamp to legal (16-235)"
-        if data['needs_adjustment']:
-            clamp_label = "Clamp to legal (16-235) — recommended"
         ModernRadioButton(card, clamp_label, self.levels_var, "clamp",
-                         "Clips extreme values, preserves contrast").pack(fill='x')
+                         "Clips values outside 16-235 — use only if broadcast compliance is required").pack(fill='x')
         ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
         ModernRadioButton(card, "Stretch to legal", self.levels_var, "stretch",
                          "Compresses full range, may reduce contrast").pack(fill='x')
         
-        if data['needs_adjustment']:
-            self.levels_var.set('clamp')
-            # Save immediately since trace_add hasn't been set yet
-            self.config_data['levels_adjustment'] = 'clamp'
+        # Always default to 'none' — clamping permanently loses data.
+        # The analysis result is shown for information; user decides.
+        self.levels_var.set('none')
+        self.config_data['levels_adjustment'] = 'none'
         
         self.levels_var.trace_add('write', lambda *_: self.config_data.update({'levels_adjustment': self.levels_var.get()}))
         
@@ -5684,10 +5697,14 @@ class RestorationWizard(BaseWindow):
                 fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(anchor='w')
         
         help_text = (
-            "Clamp: Best for most analog/DV captures. Out-of-range values are usually "
-            "noise or artifacts, not real picture detail. Preserves the original contrast.\n\n"
-            "Stretch: Use only if the video was incorrectly captured at full range (0-255) "
-            "when it should have been studio range. Keeps all detail but reduces contrast."
+            "No adjustment: Recommended for analog captures. Preserves every value the "
+            "capture card recorded — super-whites and super-blacks are often real picture "
+            "content on VHS/Hi8 tape, not noise.\n\n"
+            "Clamp: Permanently discards values outside 16-235. Only use this if you "
+            "specifically need broadcast-legal output and have confirmed the out-of-range "
+            "values are noise.\n\n"
+            "Stretch: Compresses the full 0-255 range into 16-235. Use only if the video "
+            "was captured at full range by mistake."
         )
         tk.Label(help_frame, text=help_text,
                 font=('Segoe UI', 12),
@@ -6687,8 +6704,18 @@ class RestorationWizard(BaseWindow):
                 # lives in the standard site-packages and must be found BEFORE the
                 # bundled vapoursynth.pyd in _deps/vs/site-packages/.  We only append
                 # _site_pkg so that havsfunc.py and vsutil there are still importable.
+                # Python 3.8+ on Windows uses os.add_dll_directory() for DLL
+                # resolution — PATH is no longer searched for DLLs loaded by
+                # extension modules.  We must call add_dll_directory() so the
+                # VapourSynth plugin DLLs can find their dependencies
+                # (libfftw3*.dll, vapoursynth.dll, etc.) at LoadPlugin time.
                 _wrapper = '\n'.join([
-                    'import sys',
+                    'import sys, os',
+                    # Register DLL search dirs BEFORE importing vapoursynth so
+                    # any DLL it loads can find its own dependencies.
+                    f'for _dll_dir in [{repr(VS_DEPS_DIR)}, {repr(_plugins64)}, {repr(_pip_pkg_dir)}]:',
+                    '    if os.path.isdir(_dll_dir) and hasattr(os, "add_dll_directory"):',
+                    '        os.add_dll_directory(_dll_dir)',
                     f'sys.path.append({repr(_site_pkg)})',
                     'import vapoursynth as vs  # pip-installed, Python 3.14 compatible',
                     f'with open({repr(str(script_path))}, "r", encoding="utf-8") as _f:',
