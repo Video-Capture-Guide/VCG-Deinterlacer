@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "Beta-06"
-BUILD_DATE = "2026-04-12g"
+BUILD_DATE = "2026-04-12h"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -1491,9 +1491,18 @@ def generate_vpy_script(config):
         lines.append('            pass')
         lines.append('')
 
+    # Inject the bundled site-packages path so vspipe's embedded Python can
+    # find havsfunc.py, vsutil.py, etc. even if the _pth file is incomplete.
+    _site_pkg_dir = os.path.join(VS_DEPS_DIR, 'site-packages').replace('\\', '/')
+    lines.append('# Ensure bundled site-packages is on sys.path for havsfunc / vsutil')
+    lines.append('import sys as _vcg_sys')
+    lines.append(f'_vcg_sp = "{_site_pkg_dir}"')
+    lines.append('if _vcg_sp not in _vcg_sys.path:')
+    lines.append('    _vcg_sys.path.insert(0, _vcg_sp)')
+    lines.append('')
     lines.append('import havsfunc as haf')
     lines.append('')
-    
+
     # Determine frame rate based on video format
     video_format = config.get('format', 'ntsc')
     if video_format == 'ntsc':
