@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "Beta-06"
-BUILD_DATE = "2026-04-12d"
+BUILD_DATE = "2026-04-12e"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -4000,31 +4000,38 @@ class RestorationWizard(BaseWindow):
             loading_lbl.config(text=f"Preview error: {exc}")
 
     def _update_yc_zoom(self, zoom_canvas, src_img, yc_delay):
-        """Render the zoom region with simulated chroma shift."""
+        """Render the zoom region with simulated chroma shift.
+
+        Uses PIL ImageChops.offset (no numpy required).  Numpy is used when
+        available for a marginally faster roll, but PIL alone is sufficient.
+        """
         if not HAS_PIL:
             return
         try:
-            import numpy as np
+            from PIL import ImageChops
             w, h = src_img.size
             # Crop centre 30% width × 50% height
             cw, ch = max(80, w // 3), max(60, h // 2)
             cx, cy = w // 2, h // 2
             region = src_img.crop((cx - cw // 2, cy - ch // 2,
                                    cx + cw // 2, cy + ch // 2))
-            # Simulate chroma shift in YCbCr
+            # Simulate chroma shift: split YCbCr, offset Cb and Cr horizontally
             ycbcr = region.convert('YCbCr')
-            arr = np.array(ycbcr, dtype=np.uint8)
+            y_ch, cb_ch, cr_ch = ycbcr.split()
             if yc_delay != 0:
-                arr[:, :, 1] = np.roll(arr[:, :, 1], yc_delay, axis=1)
-                arr[:, :, 2] = np.roll(arr[:, :, 2], yc_delay, axis=1)
-            shifted = Image.fromarray(arr, 'YCbCr').convert('RGB')
+                cb_ch = ImageChops.offset(cb_ch, yc_delay, 0)
+                cr_ch = ImageChops.offset(cr_ch, yc_delay, 0)
+            shifted = Image.merge('YCbCr', (y_ch, cb_ch, cr_ch)).convert('RGB')
             zoom = shifted.resize((280, 240), Image.NEAREST)
             photo = ImageTk.PhotoImage(zoom)
             zoom_canvas._vcg_photo = photo
             zoom_canvas.delete('all')
             zoom_canvas.create_image(140, 120, image=photo)
-        except Exception:
-            pass  # numpy may not be available; zoom just stays blank
+        except Exception as _e:
+            zoom_canvas.delete('all')
+            zoom_canvas.create_text(140, 120, text=f"Zoom error: {_e}",
+                                    fill=Colors.TEXT_SECONDARY,
+                                    font=('Segoe UI', 9), width=260)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 4 — CROP PRESET  (Features 3 & 4)
@@ -7449,7 +7456,7 @@ class FirstRunSetupWindow(tk.Tk):
         # Install Python packages: Pillow for image previews, vapoursynth for
         # Python-direct fallback processing when the bundled R73 vsscript.dll
         # cannot find the user's Python (e.g. Python 3.13/3.14 with R73).
-        self._pip_install_packages(['Pillow', 'vapoursynth'])
+        self._pip_install_packages(['Pillow', 'numpy', 'vapoursynth'])
 
         self._set_status("Setup complete — launching VCG Deinterlacer…")
         self._log_line("")
