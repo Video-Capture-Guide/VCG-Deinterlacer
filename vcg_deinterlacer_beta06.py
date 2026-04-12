@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "Beta-03"
-BUILD_DATE = "2026-04-11b"
+BUILD_DATE = "2026-04-12"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -6925,10 +6925,13 @@ class RestorationWizard(BaseWindow):
                     _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins')
 
                 # Wrapper: import pip vapoursynth first, then exec the .vpy script.
-                # sys.path gets deps/site-packages so havsfunc/vsutil are found.
+                # IMPORTANT: sys.path.append (not insert) — the pip vapoursynth.pyd
+                # lives in the standard site-packages and must be found BEFORE the
+                # bundled vapoursynth.pyd in _deps/vs/site-packages/.  We only append
+                # _site_pkg so that havsfunc.py and vsutil there are still importable.
                 _wrapper = '\n'.join([
                     'import sys',
-                    f'sys.path.insert(0, {repr(_site_pkg)})',
+                    f'sys.path.append({repr(_site_pkg)})',
                     'import vapoursynth as vs  # pip-installed, Python 3.14 compatible',
                     f'with open({repr(str(script_path))}, "r", encoding="utf-8") as _f:',
                     '    _code = _f.read()',
@@ -6953,6 +6956,10 @@ class RestorationWizard(BaseWindow):
                     diag.raw(f"wrapper script:\n{_wrapper}")
 
                 result = run_hidden(_py_cmd, timeout=None, env=_py_env)
+
+                if diag:
+                    diag.captured("python-direct-result", result.stdout, result.stderr)
+                    diag.kv("python-direct-returncode", str(result.returncode))
             else:
                 self._log("  pip vapoursynth not found — cannot use Python-direct fallback.")
 
