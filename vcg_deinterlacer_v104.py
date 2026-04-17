@@ -3,8 +3,8 @@
 # VCG DEINTERLACER
 # ============================================================
 #
-# Version:    Beta-03
-# Build Date: 2026-04-10
+# Version:    1.0.4
+# Build Date: 2026-04-17
 # Author:     VideoCaptureGuide
 # Website:    https://www.youtube.com/@VideoCaptureGuide
 #
@@ -55,8 +55,8 @@
 # ============================================================
 
 # Version constants
-VERSION = "Beta-06"
-BUILD_DATE = "2026-04-12h"
+VERSION = "1.0.4"
+BUILD_DATE = "2026-04-17b"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -1718,6 +1718,27 @@ def generate_vpy_script(config):
             lines.append('clip = core.resize.Spline36(clip, width=768, height=576)')
         lines.append('')
 
+    # ── nnedi3 upscale (applied last, after PAR correction) ───────────────────
+    if config.get('upscale_enabled', False):
+        nnedi3_dll = os.path.join(VS_DEPS_DIR, 'plugins64', 'libnnedi3.dll').replace('\\', '/')
+        res_str = config.get('upscale_resolution', '960x720' if video_format == 'ntsc' else '1024x768')
+        try:
+            out_w, out_h = (int(x) for x in res_str.split('x'))
+        except ValueError:
+            out_w, out_h = (960, 720) if video_format == 'ntsc' else (1024, 768)
+        lines.append(f'# nnedi3 upscale → {out_w}×{out_h} (nsize=0, nns=3, rfactor=2)')
+        lines.append('if not hasattr(core, "nnedi3"):')
+        lines.append(f'    core.std.LoadPlugin(r"{nnedi3_dll}")')
+        lines.append('# First pass: double height')
+        lines.append('clip = core.nnedi3.nnedi3(clip, field=1, dh=True, nsize=0, nns=3)')
+        lines.append('# Rotate 90°, double height again, rotate back')
+        lines.append('clip = core.std.Transpose(clip)')
+        lines.append('clip = core.nnedi3.nnedi3(clip, field=1, dh=True, nsize=0, nns=3)')
+        lines.append('clip = core.std.Transpose(clip)')
+        lines.append(f'# Resize to target {out_w}×{out_h}')
+        lines.append(f'clip = core.resize.Spline36(clip, width={out_w}, height={out_h})')
+        lines.append('')
+
     lines.append('clip.set_output()')
     return '\n'.join(lines)
 
@@ -2771,17 +2792,18 @@ class RestorationWizard(BaseWindow):
             "Crop",            # 3  → crumb 2
             "Y/C Delay",       # 4  → crumb 3 "Advanced" ①
             "Noise",           # 5  → crumb 3 "Advanced" ②
-            "Color Cast",      # 6  → crumb 3 "Advanced" ③
-            "Levels",          # 7  → crumb 3 "Advanced" ④
-            "Audio",           # 8  → crumb 3 "Advanced" ⑤
-            "Finalize",        # 9  → crumb 4
+            "Upscale",         # 6  → crumb 3 "Advanced" ③
+            "Color Cast",      # 7  → crumb 3 "Advanced" ④
+            "Levels",          # 8  → crumb 3 "Advanced" ⑤
+            "Audio",           # 9  → crumb 3 "Advanced" ⑥
+            "Finalize",        # 10 → crumb 4
         ]
         # Breadcrumb display groups: each entry = (label, [step_indices])
         self.crumbs = [
             ("Select File", [1]),
             ("Source",      [2, 3]),
-            ("Advanced",    [4, 5, 6, 7, 8]),
-            ("Finalize",    [9]),
+            ("Advanced",    [4, 5, 6, 7, 8, 9]),
+            ("Finalize",    [10]),
         ]
         self.current_step = 0
         
@@ -3038,6 +3060,19 @@ class RestorationWizard(BaseWindow):
                      fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
                      wraplength=560, justify='left').pack(anchor='w', pady=(4, 0))
 
+        # ── Upscaling ───────────────────────────────────────────────
+        section_label("Upscaling (NNEDI3)")
+        body_label(
+            "Nnedi3 is a high-quality neural-network upscaler originally developed for anime "
+            "but it also works well for analog video. It uses a 2× transpose-double pass "
+            "(rfactor=2) followed by a Spline36 resize to your chosen target resolution."
+        )
+        body_label(
+            "Parameters are fixed for best quality: nsize=0 (8×6 neighbourhood), nns=3 "
+            "(128 neurons). These settings maximise quality at the cost of processing time — "
+            "expect upscaling to add several minutes per minute of footage."
+        )
+
         # ── Third-party / License ───────────────────────────────────
         section_label("License & Third-Party Components")
         card_text(
@@ -3141,14 +3176,14 @@ class RestorationWizard(BaseWindow):
         # Update navigation buttons
         self.back_btn.set_disabled(step_index <= 1)
         # On the last advanced page, label the button to indicate Finalize is next
-        if step_index == 8:
+        if step_index == 9:
             self.next_btn.text = "Finalize →"
         else:
             self.next_btn.text = "Next →"
         self.next_btn.set_disabled(False)
         self.next_btn._draw()
 
-        # Show appropriate page (10-step navigation)
+        # Show appropriate page (11-step navigation)
         step_methods = [
             self._page_welcome,         # 0
             self._page_select_file,     # 1
@@ -3156,10 +3191,11 @@ class RestorationWizard(BaseWindow):
             self._page_crop_preset,     # 3  Crop Preset
             self._page_yc_delay,        # 4  Advanced ① Y/C Delay
             self._page_noise,           # 5  Advanced ②
-            self._page_color,           # 6  Advanced ③ Color Cast
-            self._page_levels,          # 7  Advanced ④
-            self._page_audio,           # 8  Advanced ⑤
-            self._page_finalize,        # 9
+            self._page_upscale,         # 6  Advanced ③ Upscale
+            self._page_color,           # 7  Advanced ④ Color Cast
+            self._page_levels,          # 8  Advanced ⑤
+            self._page_audio,           # 9  Advanced ⑥
+            self._page_finalize,        # 10
         ]
 
         if step_index < len(step_methods):
@@ -3195,8 +3231,8 @@ class RestorationWizard(BaseWindow):
 
     def _ask_basic_or_advanced(self):
         """After Crop, let the user choose to process now or configure advanced options."""
-        finalize_step = 9  # "Finalize" in the 10-step list
-        advanced_step = 4  # First advanced page ("Y/C Delay")
+        finalize_step = 10  # "Finalize" in the 11-step list
+        advanced_step = 4   # First advanced page ("Y/C Delay")
 
         dlg = tk.Toplevel(self)
         dlg.title("Ready to process?")
@@ -3216,7 +3252,7 @@ class RestorationWizard(BaseWindow):
                  font=('Segoe UI', 16, 'bold'), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
         tk.Label(f,
                  text="You can process now using just deinterlacing, or continue to configure "
-                      "optional enhancements (Y/C delay, noise removal, color analysis, levels, audio).",
+                      "optional enhancements (Y/C delay, noise removal, upscale, color analysis, levels, audio).",
                  font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
                  wraplength=490, justify='left').pack(anchor='w', pady=(8, 20))
 
@@ -3225,6 +3261,7 @@ class RestorationWizard(BaseWindow):
             self.bind('<Return>', lambda e: self._next_step())
             # Set defaults for all skipped advanced pages
             self.config_data.setdefault('noise_level', 'none')
+            self.config_data.setdefault('upscale_enabled', False)
             self.config_data.setdefault('color_correction', 'none')
             self.config_data.setdefault('levels_adjustment', 'none')
             self.config_data.setdefault('mix_audio', False)
@@ -3251,7 +3288,7 @@ class RestorationWizard(BaseWindow):
         adv_btn = tk.Frame(btn_row, bg=Colors.BG_CARD, cursor='hand2')
         adv_btn.pack(fill='x', ipady=8)
         adv_lbl = tk.Label(adv_btn,
-                           text="⚙   Advanced Options  (Y/C delay, noise removal, color, levels, audio)",
+                           text="⚙   Advanced Options  (Y/C delay, noise removal, upscale, color, levels, audio)",
                            font=('Segoe UI', 11), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD, cursor='hand2')
         adv_lbl.pack()
         adv_btn.bind('<Button-1>', lambda e: go_advanced())
@@ -5262,7 +5299,62 @@ class RestorationWizard(BaseWindow):
                          "Video has momentary glitches or streaks").pack(fill='x')
         
         self.dropout_var.trace_add('write', lambda *_: self.config_data.update({'dropout_removal': self.dropout_var.get() == 'yes'}))
-    
+
+    def _page_upscale(self):
+        tk.Label(self.page_container, text="Upscale with NNEDI3",
+                font=('Segoe UI', 22, 'bold'),
+                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+
+        tk.Label(self.page_container,
+                text=("Upscaling resizes your standard definition capture. Platforms like YouTube "
+                      "often apply better compression to HD uploads, making your final video look "
+                      "much cleaner online. Please note that upscaled videos take up significantly "
+                      "more hard drive space."),
+                font=('Segoe UI', 13),
+                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+                wraplength=580, justify='left').pack(anchor='w', pady=(4, 14))
+
+        # ── Resolution selector (includes No Upscale) ────────────────────────
+        video_format = self.config_data.get('format', 'ntsc')
+        if video_format == 'ntsc':
+            res_options = [
+                ("No Upscale",  "none",      "Keep original resolution (640×480)"),
+                ("960×720",     "960x720",   "1.5× upscale — good quality/speed balance"),
+                ("1280×960",    "1280x960",  "2× upscale — high quality, slower"),
+                ("1440×1080",   "1440x1080", "2.25× upscale — highest quality, slowest"),
+            ]
+        else:
+            res_options = [
+                ("No Upscale",  "none",      "Keep original resolution (768×576)"),
+                ("1024×768",    "1024x768",  "1.33× upscale — good quality/speed balance"),
+                ("1280×960",    "1280x960",  "1.67× upscale — high quality, slower"),
+                ("1440×1080",   "1440x1080", "1.875× upscale — highest quality, slowest"),
+            ]
+
+        if self.config_data.get('upscale_enabled', False):
+            saved = self.config_data.get('upscale_resolution',
+                                         '960x720' if video_format == 'ntsc' else '1024x768')
+        else:
+            saved = 'none'
+
+        self.upscale_res_var = tk.StringVar(value=saved)
+
+        def _on_res_change(*_):
+            val = self.upscale_res_var.get()
+            self.config_data['upscale_enabled'] = (val != 'none')
+            if val != 'none':
+                self.config_data['upscale_resolution'] = val
+
+        self.upscale_res_var.trace_add('write', _on_res_change)
+
+        card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+        card.pack(fill='x')
+
+        for i, (label, value, desc) in enumerate(res_options):
+            ModernRadioButton(card, label, self.upscale_res_var, value, desc).pack(fill='x')
+            if i < len(res_options) - 1:
+                ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
+
     def _page_color(self):
         tk.Label(self.page_container, text="Color Analysis",
                 font=('Segoe UI', 22, 'bold'),
