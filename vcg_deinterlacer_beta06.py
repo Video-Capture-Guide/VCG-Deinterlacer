@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "Beta-06"
-BUILD_DATE = "2026-04-17a"
+BUILD_DATE = "2026-04-17b"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -3060,6 +3060,19 @@ class RestorationWizard(BaseWindow):
                      fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
                      wraplength=560, justify='left').pack(anchor='w', pady=(4, 0))
 
+        # ── Upscaling ───────────────────────────────────────────────
+        section_label("Upscaling (NNEDI3)")
+        body_label(
+            "Nnedi3 is a high-quality neural-network upscaler originally developed for anime "
+            "but it also works well for analog video. It uses a 2× transpose-double pass "
+            "(rfactor=2) followed by a Spline36 resize to your chosen target resolution."
+        )
+        body_label(
+            "Parameters are fixed for best quality: nsize=0 (8×6 neighbourhood), nns=3 "
+            "(128 neurons). These settings maximise quality at the cost of processing time — "
+            "expect upscaling to add several minutes per minute of footage."
+        )
+
         # ── Third-party / License ───────────────────────────────────
         section_label("License & Third-Party Components")
         card_text(
@@ -5288,88 +5301,59 @@ class RestorationWizard(BaseWindow):
         self.dropout_var.trace_add('write', lambda *_: self.config_data.update({'dropout_removal': self.dropout_var.get() == 'yes'}))
 
     def _page_upscale(self):
-        tk.Label(self.page_container, text="Upscale (nnedi3)",
+        tk.Label(self.page_container, text="Upscale with NNEDI3",
                 font=('Segoe UI', 22, 'bold'),
                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
 
         tk.Label(self.page_container,
-                text="Optional — upscale the output to a higher resolution after deinterlacing.",
+                text=("Upscaling resizes your standard definition capture. Platforms like YouTube "
+                      "often apply better compression to HD uploads, making your final video look "
+                      "much cleaner online. Please note that upscaled videos take up significantly "
+                      "more hard drive space."),
                 font=('Segoe UI', 13),
                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
                 wraplength=580, justify='left').pack(anchor='w', pady=(4, 14))
 
-        # ── Info card ────────────────────────────────────────────────────────
-        info_frame = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=14)
-        info_frame.pack(fill='x', pady=(0, 12))
-
-        info_text = (
-            "nnedi3 is a high-quality neural-network upscaler originally developed for anime, "
-            "but it also works well for analog video. It uses a 2× transpose-double pass "
-            "(rfactor=2) followed by a Spline36 resize to your chosen target resolution.\n\n"
-            "Parameters are fixed for best quality: nsize=0 (8×6 neighbourhood), nns=3 "
-            "(128 neurons). These settings maximise quality at the cost of processing time — "
-            "expect upscaling to add several minutes per minute of footage."
-        )
-        tk.Label(info_frame, text=info_text,
-                font=('Segoe UI', 11),
-                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
-                wraplength=560, justify='left').pack(anchor='w')
-
-        # ── Enable checkbox ───────────────────────────────────────────────────
-        cb_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=14)
-        cb_card.pack(fill='x', pady=(0, 12))
-
-        self.upscale_var = tk.BooleanVar(value=self.config_data.get('upscale_enabled', False))
-
-        def _on_toggle():
-            enabled = self.upscale_var.get()
-            self.config_data['upscale_enabled'] = enabled
-            res_card.pack(fill='x', pady=(0, 0)) if enabled else res_card.pack_forget()
-
-        cb = tk.Checkbutton(cb_card,
-                            text="Enable nnedi3 upscaling",
-                            variable=self.upscale_var,
-                            font=('Segoe UI', 12),
-                            fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD,
-                            selectcolor=Colors.BG_DARK,
-                            activebackground=Colors.BG_CARD,
-                            activeforeground=Colors.TEXT_PRIMARY,
-                            command=_on_toggle)
-        cb.pack(anchor='w')
-
-        # ── Resolution selector (shown only when enabled) ─────────────────────
+        # ── Resolution selector (includes No Upscale) ────────────────────────
         video_format = self.config_data.get('format', 'ntsc')
         if video_format == 'ntsc':
             res_options = [
-                ("960×720",   "960x720",   "1.5× upscale — good quality/speed balance"),
-                ("1280×960",  "1280x960",  "2× upscale — high quality, slower"),
-                ("1440×1080", "1440x1080", "2.25× upscale — highest quality, slowest"),
+                ("No Upscale",  "none",      "Keep original resolution (640×480)"),
+                ("960×720",     "960x720",   "1.5× upscale — good quality/speed balance"),
+                ("1280×960",    "1280x960",  "2× upscale — high quality, slower"),
+                ("1440×1080",   "1440x1080", "2.25× upscale — highest quality, slowest"),
             ]
-            default_res = "960x720"
         else:
             res_options = [
-                ("1024×768",  "1024x768",  "1.33× upscale — good quality/speed balance"),
-                ("1280×960",  "1280x960",  "1.67× upscale — high quality, slower"),
-                ("1440×1080", "1440x1080", "1.875× upscale — highest quality, slowest"),
+                ("No Upscale",  "none",      "Keep original resolution (768×576)"),
+                ("1024×768",    "1024x768",  "1.33× upscale — good quality/speed balance"),
+                ("1280×960",    "1280x960",  "1.67× upscale — high quality, slower"),
+                ("1440×1080",   "1440x1080", "1.875× upscale — highest quality, slowest"),
             ]
-            default_res = "1024x768"
 
-        saved_res = self.config_data.get('upscale_resolution', default_res)
-        self.upscale_res_var = tk.StringVar(value=saved_res)
+        if self.config_data.get('upscale_enabled', False):
+            saved = self.config_data.get('upscale_resolution',
+                                         '960x720' if video_format == 'ntsc' else '1024x768')
+        else:
+            saved = 'none'
 
-        res_card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+        self.upscale_res_var = tk.StringVar(value=saved)
+
+        def _on_res_change(*_):
+            val = self.upscale_res_var.get()
+            self.config_data['upscale_enabled'] = (val != 'none')
+            if val != 'none':
+                self.config_data['upscale_resolution'] = val
+
+        self.upscale_res_var.trace_add('write', _on_res_change)
+
+        card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+        card.pack(fill='x')
 
         for i, (label, value, desc) in enumerate(res_options):
-            ModernRadioButton(res_card, label, self.upscale_res_var, value, desc).pack(fill='x')
+            ModernRadioButton(card, label, self.upscale_res_var, value, desc).pack(fill='x')
             if i < len(res_options) - 1:
-                ttk.Separator(res_card, orient='horizontal').pack(fill='x', padx=12)
-
-        self.upscale_res_var.trace_add('write', lambda *_: self.config_data.update(
-            {'upscale_resolution': self.upscale_res_var.get()}))
-        self.config_data.setdefault('upscale_resolution', default_res)
-
-        if self.upscale_var.get():
-            res_card.pack(fill='x', pady=(0, 0))
+                ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
 
     def _page_color(self):
         tk.Label(self.page_container, text="Color Analysis",
