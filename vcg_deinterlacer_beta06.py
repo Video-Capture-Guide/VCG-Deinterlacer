@@ -1727,7 +1727,8 @@ def generate_vpy_script(config):
         except ValueError:
             out_w, out_h = (960, 720) if video_format == 'ntsc' else (1024, 768)
         lines.append(f'# nnedi3 upscale → {out_w}×{out_h} (nsize=0, nns=3, rfactor=2)')
-        lines.append(f'core.std.LoadPlugin(r"{nnedi3_dll}")')
+        lines.append('if not hasattr(core, "nnedi3"):')
+        lines.append(f'    core.std.LoadPlugin(r"{nnedi3_dll}")')
         lines.append('# First pass: double height')
         lines.append('clip = core.nnedi3.nnedi3(clip, field=1, dh=True, nsize=0, nns=3)')
         lines.append('# Rotate 90°, double height again, rotate back')
