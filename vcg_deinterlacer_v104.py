@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.0.4"
-BUILD_DATE = "2026-04-17c"
+BUILD_DATE = "2026-04-18a"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -6794,25 +6794,40 @@ class RestorationWizard(BaseWindow):
                 pass
 
             # Auto-install vapoursynth via pip if not already present.
-            # This is the case on Python 3.13+ where the bundled vsscript.dll
-            # fails and the pip package hasn't been installed yet.
+            # IMPORTANT: in a Nuitka compiled EXE, sys.executable is the EXE
+            # itself, not python.exe. We must find the real system Python to
+            # run pip and to locate the installed package.
             if not _has_pip_vs:
                 self._log("  pip vapoursynth not found — attempting auto-install...")
                 try:
+                    import shutil as _sh
+                    _sys_py = None
+                    for _cand in ['python', 'python3', 'py']:
+                        _p = _sh.which(_cand)
+                        if _p and os.path.normcase(_p) != os.path.normcase(sys.executable):
+                            _sys_py = _p
+                            break
+                    if _sys_py is None:
+                        _sys_py = sys.executable  # running from source
+
                     _pip_r = run_hidden(
-                        [sys.executable, '-m', 'pip', 'install', 'vapoursynth',
+                        [_sys_py, '-m', 'pip', 'install', 'vapoursynth',
                          '--quiet', '--disable-pip-version-check'],
                         timeout=180
                     )
                     if _pip_r.returncode == 0:
-                        import importlib.util as _ilu2
-                        import importlib as _il2
-                        _il2.invalidate_caches()
-                        _spec2 = _ilu2.find_spec('vapoursynth')
-                        if _spec2 and _spec2.origin:
+                        # Ask that same Python where it installed vapoursynth
+                        _loc_r = run_hidden(
+                            [_sys_py, '-c',
+                             'import vapoursynth, os; '
+                             'print(os.path.dirname(vapoursynth.__file__))'],
+                            timeout=15
+                        )
+                        if _loc_r.returncode == 0 and _loc_r.stdout.strip():
                             _has_pip_vs = True
-                            _pip_pkg_dir = os.path.dirname(_spec2.origin)
-                            self._log("  pip install vapoursynth succeeded.")
+                            _pip_pkg_dir = _loc_r.stdout.strip()
+                            self._log(
+                                f"  pip install vapoursynth succeeded ({_pip_pkg_dir}).")
                     else:
                         self._log("  pip install vapoursynth failed.")
                 except Exception as _pip_ex:
@@ -6854,7 +6869,17 @@ class RestorationWizard(BaseWindow):
                     f'with open({repr(temp_y4m)}, "wb") as _out:',
                     '    _node.output(_out, y4m=True)',
                 ])
-                _py_cmd = [sys.executable, '-c', _wrapper]
+                # sys.executable is the Nuitka EXE — find the real Python.
+                import shutil as _sh2
+                _sys_py2 = None
+                for _cand2 in ['python', 'python3', 'py']:
+                    _p2 = _sh2.which(_cand2)
+                    if _p2 and os.path.normcase(_p2) != os.path.normcase(sys.executable):
+                        _sys_py2 = _p2
+                        break
+                if _sys_py2 is None:
+                    _sys_py2 = sys.executable
+                _py_cmd = [_sys_py2, '-c', _wrapper]
 
                 # Env: keep Python env vars intact (Python 3.14 needs them).
                 # PATH order:
@@ -6873,7 +6898,7 @@ class RestorationWizard(BaseWindow):
                 if diag:
                     diag.captured("vspipe-attempt-3", result.stdout, result.stderr)
                     diag.kv("vspipe-retry-3",
-                            f"Python-direct: {sys.executable} (pip vapoursynth at {_pip_pkg_dir})")
+                            f"Python-direct: {_sys_py2} (pip vapoursynth at {_pip_pkg_dir})")
                     diag.raw(f"wrapper script:\n{_wrapper}")
 
                 result = run_hidden(_py_cmd, timeout=None, env=_py_env)
