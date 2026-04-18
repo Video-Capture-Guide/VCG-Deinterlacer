@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.0.4"
-BUILD_DATE = "2026-04-17b"
+BUILD_DATE = "2026-04-17c"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -6793,6 +6793,31 @@ class RestorationWizard(BaseWindow):
             except Exception:
                 pass
 
+            # Auto-install vapoursynth via pip if not already present.
+            # This is the case on Python 3.13+ where the bundled vsscript.dll
+            # fails and the pip package hasn't been installed yet.
+            if not _has_pip_vs:
+                self._log("  pip vapoursynth not found — attempting auto-install...")
+                try:
+                    _pip_r = run_hidden(
+                        [sys.executable, '-m', 'pip', 'install', 'vapoursynth',
+                         '--quiet', '--disable-pip-version-check'],
+                        timeout=180
+                    )
+                    if _pip_r.returncode == 0:
+                        import importlib.util as _ilu2
+                        import importlib as _il2
+                        _il2.invalidate_caches()
+                        _spec2 = _ilu2.find_spec('vapoursynth')
+                        if _spec2 and _spec2.origin:
+                            _has_pip_vs = True
+                            _pip_pkg_dir = os.path.dirname(_spec2.origin)
+                            self._log("  pip install vapoursynth succeeded.")
+                    else:
+                        self._log("  pip install vapoursynth failed.")
+                except Exception as _pip_ex:
+                    self._log(f"  pip install vapoursynth error: {_pip_ex}")
+
             if _has_pip_vs:
                 self._log("  Trying Python-direct fallback (bypassing vspipe/vsscript)...")
                 _site_pkg  = os.path.join(VS_DEPS_DIR, 'site-packages')
@@ -6887,11 +6912,10 @@ class RestorationWizard(BaseWindow):
                         f"Your system Python is "
                         f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}.\n"
                         "The bundled VapourSynth R73 only supports Python 3.8–3.12.\n\n"
-                        "The app tried all fallback methods. To fix, run this in a terminal "
-                        "and restart the app:\n\n"
+                        "The app tried all fallback methods including auto-installing "
+                        "vapoursynth via pip, but all attempts failed.\n\n"
+                        "To fix, run this in a terminal and restart the app:\n\n"
                         "    pip install vapoursynth\n\n"
-                        "This is installed automatically on first run. If you see this\n"
-                        "message, pip may have failed or the package was removed.\n\n"
                         "You do NOT need to delete _deps or change your Python version."
                     )
                     _mb.showerror("VapourSynth Version Incompatibility", msg,
