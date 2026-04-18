@@ -167,6 +167,7 @@ set PIL_MODULES=^
 python -m nuitka ^
     --standalone ^
     --onefile ^
+    --onefile-tempdir-spec="{CACHE_DIR}/VCG_Deinterlacer/{VERSION}" ^
     --lto=no ^
     --jobs=2 ^
     --windows-console-mode=force ^
