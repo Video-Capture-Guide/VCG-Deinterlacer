@@ -200,6 +200,13 @@ VapourSynth failed to start (VSScript init error).
 Your system Python is 3.14.3.
 The bundled VapourSynth R73 only supports Python 3.8–3.12.
 ```
+Log output shows:
+```
+Portable env init failed – retrying with system environment
+pip vapoursynth not found – attempting auto-install...
+pip install vapoursynth failed.
+pip vapoursynth not found – cannot use Python-direct fallback.
+```
 
 **Root cause:** The bundled `_deps\vs\vsscript.dll` (from the deps ZIP) was
 compiled against Python 3.8–3.12. On a machine with Python 3.13+ as the
@@ -214,11 +221,13 @@ initialize. This is an R73 limitation; R74+ supports Python 3.12–3.14+.
    if `vapoursynth` is importable via pip
 
 **The auto-fix (already implemented):** Before attempting retry 4, the code
-now runs `pip install vapoursynth --quiet` automatically if vapoursynth is
-not yet pip-installed. After a successful install, retry 4 (Python-direct)
-can proceed. Users on Python 3.13+ with a fresh install will experience a
-brief delay on first processing run while pip installs vapoursynth, but will
-not see an error.
+runs `pip install vapoursynth --quiet` automatically if vapoursynth is not
+yet pip-installed. After a successful install, retry 4 (Python-direct)
+can proceed without user intervention.
+
+**Critical implementation detail — sys.executable in compiled EXE:**
+See Problem 11 below. This is the reason the first attempt at auto-install
+failed silently and required a second fix.
 
 **Function `_try_upgrade_bundled_vsscript()`:** This function exists in the
 code but was never called. Do not rely on it — the auto-install approach in
@@ -227,6 +236,53 @@ the retry chain is the working fix.
 **Important:** If you update the deps package (`vcg-deps-vN.zip`), prefer
 bundling a VapourSynth version that supports Python 3.13+. The current R73
 bundle requires the pip fallback on Python 3.13+ machines.
+
+---
+
+## Problem 11 — sys.executable Is the EXE, Not Python, in Nuitka Builds
+
+**Symptom:** The auto pip-install of vapoursynth runs but silently fails.
+Log shows `pip install vapoursynth failed.` immediately, with no network
+or permission error. Processing then shows the error dialog even though
+vapoursynth *could* be installed.
+
+**Root cause:** Inside a Nuitka compiled EXE, `sys.executable` is the EXE
+file itself (e.g. `VCG_Deinterlacer_1.0.4.exe`), not `python.exe`. Any code
+that calls `[sys.executable, '-m', 'pip', ...]` is actually running the EXE
+with pip arguments, which exits non-zero immediately. Similarly,
+`importlib.util.find_spec('vapoursynth')` runs in the EXE's Python context,
+which cannot see system site-packages.
+
+**Two places in the retry chain were affected:**
+1. `pip install vapoursynth` — called with `sys.executable`
+2. Python-direct command — `_py_cmd = [sys.executable, '-c', _wrapper]`
+
+**Fix:** Use `shutil.which()` to find the real system Python, explicitly
+skipping any path that matches `sys.executable`:
+```python
+import shutil as _sh
+_sys_py = None
+for _cand in ['python', 'python3', 'py']:
+    _p = _sh.which(_cand)
+    if _p and os.path.normcase(_p) != os.path.normcase(sys.executable):
+        _sys_py = _p
+        break
+if _sys_py is None:
+    _sys_py = sys.executable  # running from source, sys.executable IS Python
+```
+After `pip install` succeeds, ask that same Python where vapoursynth was
+installed rather than using `find_spec` (which also can't see system packages
+from EXE context):
+```python
+_loc_r = run_hidden([_sys_py, '-c',
+    'import vapoursynth, os; print(os.path.dirname(vapoursynth.__file__))'],
+    timeout=15)
+_pip_pkg_dir = _loc_r.stdout.strip()
+```
+
+**Rule:** Any subprocess that needs to run Python code from within a compiled
+EXE must use a discovered system Python, never `sys.executable`. This applies
+to pip, importlib checks, and Python-direct script execution.
 
 ---
 
