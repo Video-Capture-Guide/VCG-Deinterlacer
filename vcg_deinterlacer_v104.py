@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.0.4"
-BUILD_DATE = "2026-04-18a"
+BUILD_DATE = "2026-04-19a"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -6777,137 +6777,154 @@ class RestorationWizard(BaseWindow):
                 diag.cmd(pip_cmd)
             result = run_hidden(pip_cmd, timeout=None)
 
-        # Retry 3: Python-direct — execute the .vpy script via sys.executable
-        # with pip-installed vapoursynth.  This bypasses vspipe.exe and
-        # vsscript.dll entirely, avoiding the Python version incompatibility.
+        # Retry 3A & 3B: Python-direct — bypass vspipe/vsscript entirely.
+        # Root cause: vsscript.dll (R73 bundled) cannot find Python 3.13+.
+        # 3A: use bundled vapoursynth.pyd from _deps/vs/site-packages/ —
+        #     the bundle ships a .pyd compiled for the same Python it bundles,
+        #     so no pip install is needed at all.
+        # 3B: pip-install fallback for environments where 3A is unavailable.
         _init_failed3 = ('Failed to initialize VSScript' in (result.stderr or ''))
         if result.returncode != 0 and _init_failed3:
-            _has_pip_vs = False
-            _pip_pkg_dir = ''
-            try:
-                import importlib.util as _ilu
-                _spec = _ilu.find_spec('vapoursynth')
-                if _spec and _spec.origin:
-                    _has_pip_vs = True
-                    _pip_pkg_dir = os.path.dirname(_spec.origin)
-            except Exception:
-                pass
-
-            # Auto-install vapoursynth via pip if not already present.
-            # IMPORTANT: in a Nuitka compiled EXE, sys.executable is the EXE
-            # itself, not python.exe. We must find the real system Python to
-            # run pip and to locate the installed package.
-            if not _has_pip_vs:
-                self._log("  pip vapoursynth not found — attempting auto-install...")
+            # ── Discover system Python ────────────────────────────────────
+            # In a Nuitka compiled EXE sys.executable is the EXE itself.
+            # Try 'py' (Windows Python Launcher) first — it always resolves
+            # to a real interpreter and honours python3.x shebangs.
+            # Verify each candidate with --version to reject MS Store stubs.
+            import shutil as _sh
+            _sys_py = None
+            for _cand in ['py', 'python', 'python3']:
+                _p = _sh.which(_cand)
+                if not _p:
+                    continue
+                if os.path.normcase(_p) == os.path.normcase(sys.executable):
+                    continue
                 try:
-                    import shutil as _sh
-                    _sys_py = None
-                    for _cand in ['python', 'python3', 'py']:
-                        _p = _sh.which(_cand)
-                        if _p and os.path.normcase(_p) != os.path.normcase(sys.executable):
-                            _sys_py = _p
-                            break
-                    if _sys_py is None:
-                        _sys_py = sys.executable  # running from source
+                    _ver_r = run_hidden([_p, '--version'], timeout=10)
+                    _ver_out = (_ver_r.stdout or '') + (_ver_r.stderr or '')
+                    if _ver_r.returncode == 0 and 'Python' in _ver_out:
+                        _sys_py = _p
+                        break
+                except Exception:
+                    pass
+            if _sys_py is None:
+                _sys_py = sys.executable  # running from source
 
-                    _pip_r = run_hidden(
-                        [_sys_py, '-m', 'pip', 'install', 'vapoursynth',
-                         '--quiet', '--disable-pip-version-check'],
-                        timeout=180
-                    )
-                    if _pip_r.returncode == 0:
-                        # Ask that same Python where it installed vapoursynth
-                        _loc_r = run_hidden(
-                            [_sys_py, '-c',
-                             'import vapoursynth, os; '
-                             'print(os.path.dirname(vapoursynth.__file__))'],
-                            timeout=15
-                        )
-                        if _loc_r.returncode == 0 and _loc_r.stdout.strip():
-                            _has_pip_vs = True
-                            _pip_pkg_dir = _loc_r.stdout.strip()
-                            self._log(
-                                f"  pip install vapoursynth succeeded ({_pip_pkg_dir}).")
-                    else:
-                        self._log("  pip install vapoursynth failed.")
-                except Exception as _pip_ex:
-                    self._log(f"  pip install vapoursynth error: {_pip_ex}")
+            _site_pkg  = os.path.join(VS_DEPS_DIR, 'site-packages')
+            _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins64')
+            if not os.path.isdir(_plugins64):
+                _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins')
 
-            if _has_pip_vs:
-                self._log("  Trying Python-direct fallback (bypassing vspipe/vsscript)...")
-                _site_pkg  = os.path.join(VS_DEPS_DIR, 'site-packages')
-                _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins64')
-                if not os.path.isdir(_plugins64):
-                    _plugins64 = os.path.join(VS_DEPS_DIR, 'plugins')
-
-                # Wrapper: import pip vapoursynth first, then exec the .vpy script.
-                # IMPORTANT: sys.path.append (not insert) — the pip vapoursynth.pyd
-                # lives in the standard site-packages and must be found BEFORE the
-                # bundled vapoursynth.pyd in _deps/vs/site-packages/.  We only append
-                # _site_pkg so that havsfunc.py and vsutil there are still importable.
-                # Python 3.8+ on Windows uses os.add_dll_directory() for DLL
-                # resolution — PATH is no longer searched for DLLs loaded by
-                # extension modules.  We must call add_dll_directory() so the
-                # VapourSynth plugin DLLs can find their dependencies
-                # (libfftw3*.dll, vapoursynth.dll, etc.) at LoadPlugin time.
-                _wrapper = '\n'.join([
+            # ── Retry 3A: bundled vapoursynth.pyd ────────────────────────
+            # sys.path.insert(0, ...) loads the bundled .pyd before any
+            # system-installed vapoursynth — no pip install needed.
+            _bundled_pyd = os.path.join(_site_pkg, 'vapoursynth.pyd')
+            _3a_tried = False
+            if os.path.isfile(_bundled_pyd):
+                _3a_tried = True
+                self._log("  Trying Python-direct with bundled vapoursynth.pyd (retry 3A)...")
+                _wrapper_3a = '\n'.join([
                     'import sys, os',
-                    # Register DLL search dirs BEFORE importing vapoursynth so
-                    # any DLL it loads can find its own dependencies.
-                    f'for _dll_dir in [{repr(VS_DEPS_DIR)}, {repr(_plugins64)}, {repr(_pip_pkg_dir)}]:',
+                    f'for _dll_dir in [{repr(VS_DEPS_DIR)}, {repr(_plugins64)}]:',
                     '    if os.path.isdir(_dll_dir) and hasattr(os, "add_dll_directory"):',
                     '        os.add_dll_directory(_dll_dir)',
-                    f'sys.path.append({repr(_site_pkg)})',
-                    'import vapoursynth as vs  # pip-installed, Python 3.14 compatible',
+                    f'sys.path.insert(0, {repr(_site_pkg)})',
+                    'import vapoursynth as vs',
                     f'with open({repr(str(script_path))}, "r", encoding="utf-8") as _f:',
                     '    _code = _f.read()',
                     f'exec(compile(_code, {repr(str(script_path))}, "exec"))',
-                    # vs.get_output(0) returns VideoOutputTuple(clip, alpha, alt_output)
-                    # in newer VapourSynth API — extract .clip to get the VideoNode.
                     '_result = vs.get_output(0)',
                     '_node = _result.clip if hasattr(_result, "clip") else _result',
                     f'with open({repr(temp_y4m)}, "wb") as _out:',
                     '    _node.output(_out, y4m=True)',
                 ])
-                # sys.executable is the Nuitka EXE — find the real Python.
-                import shutil as _sh2
-                _sys_py2 = None
-                for _cand2 in ['python', 'python3', 'py']:
-                    _p2 = _sh2.which(_cand2)
-                    if _p2 and os.path.normcase(_p2) != os.path.normcase(sys.executable):
-                        _sys_py2 = _p2
-                        break
-                if _sys_py2 is None:
-                    _sys_py2 = sys.executable
-                _py_cmd = [_sys_py2, '-c', _wrapper]
-
-                # Env: keep Python env vars intact (Python 3.14 needs them).
-                # PATH order:
-                #   1. VS_DEPS_DIR  — bundled vapoursynth.dll, libfftw3*.dll,
-                #                    python3.dll and other DLL deps plugins need
-                #   2. _plugins64   — the plugin DLLs themselves (needed by each other)
-                #   3. _pip_pkg_dir — pip vapoursynth.dll (already loaded in memory)
-                # VS_DEPS_DIR must come first so plugins find the correct
-                # companion DLLs (libfftw3, etc.) that live alongside vspipe.
-                _py_env = os.environ.copy()
-                _py_env['PATH'] = (VS_DEPS_DIR + os.pathsep
-                                   + _plugins64 + os.pathsep
-                                   + _pip_pkg_dir + os.pathsep
-                                   + _py_env.get('PATH', ''))
-
+                _py_env_3a = os.environ.copy()
+                _py_env_3a['PATH'] = (VS_DEPS_DIR + os.pathsep
+                                      + _plugins64 + os.pathsep
+                                      + _py_env_3a.get('PATH', ''))
                 if diag:
-                    diag.captured("vspipe-attempt-3", result.stdout, result.stderr)
-                    diag.kv("vspipe-retry-3",
-                            f"Python-direct: {_sys_py2} (pip vapoursynth at {_pip_pkg_dir})")
-                    diag.raw(f"wrapper script:\n{_wrapper}")
-
-                result = run_hidden(_py_cmd, timeout=None, env=_py_env)
-
+                    diag.captured("vspipe-attempt-3a", result.stdout, result.stderr)
+                    diag.kv("vspipe-retry-3a", f"Python-direct bundled pyd: {_sys_py}")
+                    diag.raw(f"wrapper-3a:\n{_wrapper_3a}")
+                result = run_hidden([_sys_py, '-c', _wrapper_3a],
+                                    timeout=None, env=_py_env_3a)
                 if diag:
-                    diag.captured("python-direct-result", result.stdout, result.stderr)
-                    diag.kv("python-direct-returncode", str(result.returncode))
-            else:
-                self._log("  pip vapoursynth not found — cannot use Python-direct fallback.")
+                    diag.captured("python-direct-3a-result", result.stdout, result.stderr)
+                    diag.kv("python-direct-3a-returncode", str(result.returncode))
+
+            # ── Retry 3B: pip-installed vapoursynth (fallback) ───────────
+            if not _3a_tried or result.returncode != 0:
+                _has_pip_vs = False
+                _pip_pkg_dir = ''
+                try:
+                    import importlib.util as _ilu
+                    _spec = _ilu.find_spec('vapoursynth')
+                    if _spec and _spec.origin:
+                        _has_pip_vs = True
+                        _pip_pkg_dir = os.path.dirname(_spec.origin)
+                except Exception:
+                    pass
+
+                if not _has_pip_vs:
+                    self._log("  Bundled pyd unavailable — attempting pip install vapoursynth...")
+                    try:
+                        _pip_r = run_hidden(
+                            [_sys_py, '-m', 'pip', 'install', 'vapoursynth',
+                             '--quiet', '--disable-pip-version-check'],
+                            timeout=180
+                        )
+                        if _pip_r.returncode == 0:
+                            _loc_r = run_hidden(
+                                [_sys_py, '-c',
+                                 'import vapoursynth, os; '
+                                 'print(os.path.dirname(vapoursynth.__file__))'],
+                                timeout=15
+                            )
+                            if _loc_r.returncode == 0 and _loc_r.stdout.strip():
+                                _has_pip_vs = True
+                                _pip_pkg_dir = _loc_r.stdout.strip()
+                                self._log(
+                                    f"  pip install vapoursynth succeeded ({_pip_pkg_dir}).")
+                        else:
+                            self._log("  pip install vapoursynth failed.")
+                    except Exception as _pip_ex:
+                        self._log(f"  pip install vapoursynth error: {_pip_ex}")
+
+                if _has_pip_vs:
+                    self._log("  Trying Python-direct with pip vapoursynth (retry 3B)...")
+                    # sys.path.append (not insert) — pip .pyd is in standard
+                    # site-packages; append _site_pkg so havsfunc.py is importable.
+                    _wrapper_3b = '\n'.join([
+                        'import sys, os',
+                        f'for _dll_dir in [{repr(VS_DEPS_DIR)}, {repr(_plugins64)}, {repr(_pip_pkg_dir)}]:',
+                        '    if os.path.isdir(_dll_dir) and hasattr(os, "add_dll_directory"):',
+                        '        os.add_dll_directory(_dll_dir)',
+                        f'sys.path.append({repr(_site_pkg)})',
+                        'import vapoursynth as vs',
+                        f'with open({repr(str(script_path))}, "r", encoding="utf-8") as _f:',
+                        '    _code = _f.read()',
+                        f'exec(compile(_code, {repr(str(script_path))}, "exec"))',
+                        '_result = vs.get_output(0)',
+                        '_node = _result.clip if hasattr(_result, "clip") else _result',
+                        f'with open({repr(temp_y4m)}, "wb") as _out:',
+                        '    _node.output(_out, y4m=True)',
+                    ])
+                    _py_env_3b = os.environ.copy()
+                    _py_env_3b['PATH'] = (VS_DEPS_DIR + os.pathsep
+                                         + _plugins64 + os.pathsep
+                                         + _pip_pkg_dir + os.pathsep
+                                         + _py_env_3b.get('PATH', ''))
+                    if diag:
+                        diag.captured("vspipe-attempt-3b", result.stdout, result.stderr)
+                        diag.kv("vspipe-retry-3b",
+                                f"Python-direct pip: {_sys_py} (at {_pip_pkg_dir})")
+                        diag.raw(f"wrapper-3b:\n{_wrapper_3b}")
+                    result = run_hidden([_sys_py, '-c', _wrapper_3b],
+                                        timeout=None, env=_py_env_3b)
+                    if diag:
+                        diag.captured("python-direct-3b-result", result.stdout, result.stderr)
+                        diag.kv("python-direct-3b-returncode", str(result.returncode))
+                else:
+                    self._log("  pip vapoursynth not available — Python-direct fallback exhausted.")
 
         if result.returncode != 0:
             err_text = (result.stderr or result.stdout or "").strip()
