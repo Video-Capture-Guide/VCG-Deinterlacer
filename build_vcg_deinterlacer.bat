@@ -43,7 +43,7 @@ set SCRIPT_DIR=%~dp0
 cd /d "%SCRIPT_DIR%"
 
 REM ── Verify source file exists ─────────────────────────────────
-set SOURCE=vcg_deinterlacer_v104.py
+set SOURCE=vcg_deinterlacer_v105.py
 if not exist "%SOURCE%" (
     echo ERROR: %SOURCE% not found in %SCRIPT_DIR%
     pause
