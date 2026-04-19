@@ -10,7 +10,7 @@ root cause, and the fix that worked. Read this before making any changes.
 
 | File | Purpose |
 |------|---------|
-| `vcg_deinterlacer_v104.py` | Main application — all logic lives here |
+| `vcg_deinterlacer_v105.py` | Main application — all logic lives here (see naming convention below) |
 | `build_vcg_deinterlacer.bat` | Nuitka compile script |
 | `clean_build.bat` | Wipes Nuitka artifacts before a fresh compile |
 | `BUILD_INSTRUCTIONS.md` | Step-by-step build and release guide |
@@ -19,6 +19,29 @@ root cause, and the fix that worked. Read this before making any changes.
 **Git push method:** PAT must be embedded in URL directly —
 `git push "https://Video-Capture-Guide:<PAT>@github.com/Video-Capture-Guide/VCG-Deinterlacer.git" main`
 (The local proxy returns 403; do not use the default remote.)
+
+---
+
+## Source File & Release Naming Convention
+
+**Source file:** Each time changes are made, rename the `.py` file by incrementing the number:
+```
+vcg_deinterlacer_v105.py  ← current
+vcg_deinterlacer_v106.py  ← next change
+vcg_deinterlacer_v107.py  ← change after that
+```
+Delete the old `.py` file from the repo when renaming — only one `.py` file should exist at a time.
+
+**GitHub Release tag:** Use a 4-part version number so users can clearly see when a new build
+is available, even for small changes:
+```
+1.0.4.3  ← current release
+1.0.5.0  ← next release (when py file becomes v105)
+1.0.6.0  ← release after that
+```
+The fourth number (`.3`, `.4`, etc.) can be incremented for patch releases between full version bumps.
+
+**Rule:** Every new `.py` file = a new EXE build = a new GitHub Release with an incremented version number. This ensures users always know they have the latest version.
 
 ---
 
