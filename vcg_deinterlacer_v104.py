@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.0.4"
-BUILD_DATE = "2026-04-19a"
+BUILD_DATE = "2026-04-19b"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -1583,6 +1583,15 @@ def generate_vpy_script(config):
         lines.append(f'clip = core.std.Crop(clip, left={cl}, right={cr}, top={ct}, bottom={cb_px})')
         lines.append('')
     # crop_preset == 'none': no crop
+
+    # ── Snap to even height (SeparateFields / QTGMC requirement) ─────────────
+    # Manual crops with an odd pixel count produce odd-height clips.
+    # SeparateFields (used inside QTGMC) requires height % 2 == 0.
+    # Trim one extra pixel from the bottom if needed — invisible in practice.
+    lines.append('# Snap height to even number (SeparateFields requires mod 2)')
+    lines.append('if clip.height % 2 != 0:')
+    lines.append('    clip = core.std.Crop(clip, bottom=1)')
+    lines.append('')
 
     # ── Deinterlacing / IVTC ─────────────────────────────────────────────────
     field_order = config.get('field_order', 'tff')
