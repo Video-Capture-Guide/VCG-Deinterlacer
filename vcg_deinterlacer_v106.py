@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.0.4"
-BUILD_DATE = "2026-04-19e"
+BUILD_DATE = "2026-04-19f"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -6804,17 +6804,32 @@ class RestorationWizard(BaseWindow):
             # Verify each candidate with --version to reject MS Store stubs.
             import shutil as _sh
             _sys_py = None
-            _exe_dir = os.path.normcase(os.path.dirname(sys.executable))
+
+            # Resolve 8.3 short paths (e.g. VCG_DE~1\104~1.0) to long paths so
+            # the directory comparison works even when Nuitka puts the extraction
+            # dir on PATH using its 8.3 short form.
+            def _long_path(p):
+                try:
+                    import ctypes
+                    _buf = ctypes.create_unicode_buffer(32768)
+                    if ctypes.windll.kernel32.GetLongPathNameW(p, _buf, 32768) > 0:
+                        return _buf.value
+                except Exception:
+                    pass
+                return p
+
+            _exe_dir = os.path.normcase(os.path.dirname(_long_path(sys.executable)))
             for _cand in ['py', 'python', 'python3']:
                 _p = _sh.which(_cand)
                 if not _p:
                     continue
-                _p_norm = os.path.normcase(_p)
-                if _p_norm == os.path.normcase(sys.executable):
+                _p_long = _long_path(_p)
+                _p_norm = os.path.normcase(_p_long)
+                if _p_norm == os.path.normcase(_long_path(sys.executable)):
                     continue
                 # Skip any Python in the same folder as the EXE — that's Nuitka's
                 # embedded python.exe in the onefile extraction directory, not a
-                # real system install.
+                # real system install. Uses long-path comparison to handle 8.3 names.
                 if os.path.normcase(os.path.dirname(_p_norm)) == _exe_dir:
                     continue
                 try:
