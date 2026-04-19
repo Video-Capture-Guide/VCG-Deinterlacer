@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.0.4"
-BUILD_DATE = "2026-04-19d"
+BUILD_DATE = "2026-04-19e"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -1581,6 +1581,8 @@ def generate_vpy_script(config):
         cb_px = config.get('crop_bottom', 0)
         lines.append(f'# Manual crop (left={cl}, right={cr}, top={ct}, bottom={cb_px})')
         lines.append(f'_vcg_l, _vcg_r, _vcg_t, _vcg_b = {cl}, {cr}, {ct}, {cb_px}')
+        lines.append('if _vcg_l % 2 != 0: _vcg_l += 1  # YUV422: left offset must be even')
+        lines.append('if _vcg_t % 2 != 0: _vcg_t += 1  # YUV420: top offset must be even')
         lines.append('if (clip.width  - _vcg_l - _vcg_r) % 2 != 0: _vcg_r += 1')
         lines.append('if (clip.height - _vcg_t - _vcg_b) % 2 != 0: _vcg_b += 1')
         lines.append('clip = core.std.Crop(clip, left=_vcg_l, right=_vcg_r, top=_vcg_t, bottom=_vcg_b)')
