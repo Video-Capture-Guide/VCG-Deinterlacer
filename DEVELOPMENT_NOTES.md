@@ -15,9 +15,9 @@ root cause, and the fix that worked. Read this before making any changes.
 | `clean_build.bat` | Wipes Nuitka artifacts before a fresh compile |
 | `BUILD_INSTRUCTIONS.md` | Step-by-step build and release guide |
 
-**Branch for development:** `claude/vcg-deinterlacer-update-8l66j`
+**Branch for development:** `main` (single branch — no feature branches needed for solo project)
 **Git push method:** PAT must be embedded in URL directly —
-`git push "https://Video-Capture-Guide:<PAT>@github.com/Video-Capture-Guide/vcg-deinterlacer.git" <branch>`
+`git push "https://Video-Capture-Guide:<PAT>@github.com/Video-Capture-Guide/VCG-Deinterlacer.git" main`
 (The local proxy returns 403; do not use the default remote.)
 
 ---
@@ -217,25 +217,40 @@ initialize. This is an R73 limitation; R74+ supports Python 3.12–3.14+.
 1. Portable vspipe with custom env — fails (vsscript.dll incompatibility)
 2. Portable vspipe with system PATH — still fails (same DLL)
 3. pip-installed vspipe (R74+, if available) — succeeds if R74 is installed
-4. Python-direct execution (bypasses vspipe/vsscript entirely) — succeeds
-   if `vapoursynth` is importable via pip
+4A. **Retry 3A — bundled vapoursynth.pyd, Python-direct** — bypasses vspipe/vsscript entirely.
+    Uses `sys.path.insert(0, _deps\vs\site-packages)` to load the bundled `vapoursynth.pyd`
+    directly into a system Python subprocess. This is the working fix for Python 3.13+ machines.
+4B. **Retry 3B — pip-installed vapoursynth, Python-direct** — fallback if bundled .pyd fails.
+    Runs `pip install vapoursynth --quiet` automatically then re-attempts Python-direct.
 
-**The auto-fix (already implemented):** Before attempting retry 4, the code
-runs `pip install vapoursynth --quiet` automatically if vapoursynth is not
-yet pip-installed. After a successful install, retry 4 (Python-direct)
-can proceed without user intervention.
+**Retry 3A implementation detail:**
+```python
+_bundled_pyd = os.path.join(_site_pkg, 'vapoursynth.pyd')
+if os.path.isfile(_bundled_pyd):
+    _wrapper_3a = '\n'.join([
+        'import sys, os',
+        f'for _dll_dir in [{repr(VS_DEPS_DIR)}, {repr(_plugins64)}]:',
+        '    if os.path.isdir(_dll_dir) and hasattr(os, "add_dll_directory"):',
+        '        os.add_dll_directory(_dll_dir)',
+        f'sys.path.insert(0, {repr(_site_pkg)})',
+        'import vapoursynth as vs',
+        # ... exec the .vpy script and write y4m output ...
+    ])
+    result = run_hidden([_sys_py, '-c', _wrapper_3a], timeout=None, env=_py_env_3a)
+```
+The `os.add_dll_directory()` calls are essential — they tell Windows where to find
+`vapoursynth.dll` and the plugin DLLs before `import vapoursynth` runs.
 
 **Critical implementation detail — sys.executable in compiled EXE:**
-See Problem 11 below. This is the reason the first attempt at auto-install
-failed silently and required a second fix.
+See Problem 11 below. System Python must be discovered via `shutil.which()`.
+Try `'py'` (Windows Launcher) first — it handles multiple installed versions.
 
 **Function `_try_upgrade_bundled_vsscript()`:** This function exists in the
-code but was never called. Do not rely on it — the auto-install approach in
-the retry chain is the working fix.
+code but was never called. Do not rely on it — Retry 3A is the working fix.
 
 **Important:** If you update the deps package (`vcg-deps-vN.zip`), prefer
 bundling a VapourSynth version that supports Python 3.13+. The current R73
-bundle requires the pip fallback on Python 3.13+ machines.
+bundle requires the Retry 3A fallback on Python 3.13+ machines.
 
 ---
 
@@ -262,7 +277,7 @@ skipping any path that matches `sys.executable`:
 ```python
 import shutil as _sh
 _sys_py = None
-for _cand in ['python', 'python3', 'py']:
+for _cand in ['py', 'python', 'python3']:  # 'py' = Windows Launcher, handles multi-version installs
     _p = _sh.which(_cand)
     if _p and os.path.normcase(_p) != os.path.normcase(sys.executable):
         _sys_py = _p
@@ -411,23 +426,20 @@ to use nnedi3 features.
 
 ## Git Workflow
 
-The local git remote points to a proxy that occasionally returns 403.
-Always push using the PAT embedded in the URL:
+All development goes directly to `main`. The local git remote points to a
+proxy that returns 403 — always push using the PAT embedded in the URL:
+
 ```bash
-git push "https://Video-Capture-Guide:<PAT>@github.com/Video-Capture-Guide/vcg-deinterlacer.git" <branch>
+git remote set-url origin https://<PAT>@github.com/Video-Capture-Guide/VCG-Deinterlacer.git
+git push -u origin HEAD:main
 ```
 
-After pushing, the local tracking ref will show "1 unpushed commit" until
-you fetch to update it:
+If the push is rejected because the remote is ahead (e.g. user edited on GitHub):
 ```bash
-git fetch "https://Video-Capture-Guide:<PAT>@github.com/Video-Capture-Guide/vcg-deinterlacer.git" \
-  <branch>:refs/remotes/origin/<branch>
+git fetch origin main
+git rebase origin/main
+git push origin HEAD:main
 ```
 
-Development happens on `claude/vcg-deinterlacer-update-8l66j`. After testing,
-merge into `main` using a local branch tracking `origin/main`:
-```bash
-git checkout -b main-local origin/main
-git merge --no-ff claude/vcg-deinterlacer-update-8l66j -m "Merge message"
-git push "https://..." main-local:main
-```
+**Getting a PAT:** GitHub → Settings → Developer settings → Personal access tokens → Fine-grained.
+Scope needed: Contents (read + write) on the VCG-Deinterlacer repo.

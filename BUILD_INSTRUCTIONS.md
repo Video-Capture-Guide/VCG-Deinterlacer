@@ -1,8 +1,8 @@
-# VCG Deinterlacer — Beta-02 Build & Release Instructions
+# VCG Deinterlacer — v1.0.4 Build & Release Instructions
 
 ## Overview
 
-Beta-02 is a **portable ZIP distribution** — no installer, no UAC prompt, no Windows SmartScreen
+v1.0.4 is a **portable ZIP distribution** — no installer, no UAC prompt, no Windows SmartScreen
 installer dialog. Users download a ZIP, extract it anywhere, and double-click the EXE. On first
 run the app downloads and installs FFmpeg and VapourSynth automatically via an in-app setup wizard.
 
@@ -10,9 +10,9 @@ run the app downloads and installs FFmpeg and VapourSynth automatically via an i
 
 | File | Purpose |
 |------|---------|
-| `vcg_deinterlacer_beta_0_5.py` | Main application source code (Beta-02) |
+| `vcg_deinterlacer_v104.py` | Main application source code (v1.0.4) |
 | `build_vcg_deinterlacer.bat` | Compiles the EXE using Nuitka |
-| `VCG_Deinterlacer_Setup.iss` | Legacy Inno Setup script (Beta-01 only — not used for Beta-02) |
+| `VCG_Deinterlacer_Setup.iss` | Legacy Inno Setup script (Beta-01 only — not used for v1.0.4) |
 | `requirements.txt` | Python dependencies |
 | `LICENSE.txt` | MIT license (included in ZIP) |
 | `README.md` | User-facing documentation (included in ZIP as README.txt) |
@@ -42,7 +42,7 @@ Before building for the first time, ensure the following are installed:
 Your build folder must contain these files before running the BAT:
 
 ```
-vcg_deinterlacer_beta_0_5.py   ← main source (Beta-02)
+vcg_deinterlacer_v104.py       ← main source (v1.0.4)
 build_vcg_deinterlacer.bat     ← build script
 requirements.txt
 LICENSE.txt
@@ -61,9 +61,9 @@ Nuitka cache first** or you may get a segfault on launch.
 Open PowerShell in your build folder and run:
 
 ```powershell
-Remove-Item -Recurse -Force dist\vcg_deinterlacer_beta_0_5.build -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force dist\vcg_deinterlacer_beta_0_5.dist -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force dist\vcg_deinterlacer_beta_0_5.onefile-build -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force dist\vcg_deinterlacer_v104.build -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force dist\vcg_deinterlacer_v104.dist -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force dist\vcg_deinterlacer_v104.onefile-build -ErrorAction SilentlyContinue
 Remove-Item -Force dist\VCG_Deinterlacer.exe -ErrorAction SilentlyContinue
 ```
 
@@ -78,7 +78,7 @@ Double-click `build_vcg_deinterlacer.bat` or run it from a command prompt.
 What it does:
 - Installs/updates required Python packages
 - Locates the tkdnd drag-and-drop folder
-- Compiles `vcg_deinterlacer_beta_0_5.py` into `dist\VCG_Deinterlacer.exe`
+- Compiles `vcg_deinterlacer_v104.py` into `dist\VCG_Deinterlacer.exe`
   using Nuitka with `--onefile`
 
 **First build takes 10–30 minutes.** Subsequent builds use Nuitka's cache
@@ -111,24 +111,24 @@ Confirm:
 
 ---
 
-## Step 4 — Package as ZIP (Beta-02 distribution format)
+## Step 4 — Package as ZIP (v1.0.4 distribution format)
 
 No installer is needed. Package the app as a ZIP:
 
-1. Create a folder called `VCG_Deinterlacer_Beta-02\`
+1. Create a folder called `VCG_Deinterlacer_v1.0.4\`
 2. Copy into it:
    - `dist\VCG_Deinterlacer.exe`
    - `logo.png`
    - `README.md` (rename to `README.txt` inside the ZIP)
    - `LICENSE.txt`
-3. Zip the folder to produce: `VCG_Deinterlacer_Beta-02.zip`
+3. Zip the folder to produce: `VCG_Deinterlacer_v1.0.4.zip`
 
 That's the release artifact. No Inno Setup step required.
 
 ### PowerShell one-liner to create the ZIP:
 
 ```powershell
-$out = "VCG_Deinterlacer_Beta-02"
+$out = "VCG_Deinterlacer_v1.0.4"
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item dist\VCG_Deinterlacer.exe $out\
 Copy-Item logo.png                  $out\
@@ -143,7 +143,7 @@ Write-Host "Created: $out.zip"
 
 ## Step 5 — Test the ZIP
 
-1. Extract `VCG_Deinterlacer_Beta-02.zip` to a **new folder on a clean user profile**
+1. Extract `VCG_Deinterlacer_v1.0.4.zip` to a **new folder on a clean user profile**
    (or a machine without FFmpeg/VapourSynth installed)
 2. Double-click `VCG_Deinterlacer.exe`
 3. The First Run Setup window should appear and:
@@ -160,14 +160,14 @@ Write-Host "Created: $out.zip"
 
 ## Step 6 — Distribute
 
-Upload `VCG_Deinterlacer_Beta-02.zip` to your distribution channels:
-- **GitHub Releases** — create a release tag `Beta-02`, attach the ZIP
+Upload `VCG_Deinterlacer_v1.0.4.zip` to your distribution channels:
+- **GitHub Releases** — create a release tag `v1.0.4`, attach the ZIP
 - **VideoHelp** — https://www.videohelp.com/software
 - **YouTube description** — link in your video tutorials
 
 ---
 
-## How Beta-02 Portable Mode Works
+## How Portable Mode Works
 
 The app uses a fully **self-contained portable deps bundle** (`vcg-deps-v6.zip`) hosted on
 GitHub Releases. No system-wide installation of FFmpeg or VapourSynth is required or performed.
@@ -211,12 +211,12 @@ _deps\
 **Updating the deps bundle:**
 - Build a new ZIP using `build_deps_package.bat`
 - Upload to `vcg-deinterlacer-deps` GitHub Releases as `vN`
-- Bump `DEPS_VERSION` and `DEPS_ZIP_URL` in `vcg_deinterlacer_beta_0_5.py`
+- Bump `DEPS_VERSION` and `DEPS_ZIP_URL` in `vcg_deinterlacer_v104.py`
 - Rebuild the EXE
 
 ---
 
-## Known Beta-02 Limitations
+## Known Limitations
 
 | Issue | Status |
 |-------|--------|
@@ -230,6 +230,10 @@ _deps\
 
 | Version | Date | Notes |
 |---------|------|-------|
+| v1.0.4  | 2026-04-19 | Release: Python 3.13+ VSScript fallback; manual crop mod-2 width/height auto-correction |
+| Beta-03b | 2026-04-19 | Fix odd-width crash from manual crop (YUV422 mod-2 width constraint) |
+| Beta-03a | 2026-04-19 | Fix odd-height crash from manual crop (SeparateFields mod-2 height constraint) |
+| Beta-03  | 2026-04-18 | Python 3.13+ compatibility via bundled vapoursynth.pyd, bypassing VSScript |
 | Beta-02b | 2026-04-05 | Fix RGB source (Lagarith/HuffYUV RGB); EXE now caches to AppData instead of Temp |
 | Beta-02 | 2026-03-28 | Portable ZIP distribution; first-run setup built into app; no installer |
 | Beta-01 | 2026-03-23 | Auto-installs FFmpeg + VapourSynth; Inno Setup installer; deploys to %LOCALAPPDATA% |
