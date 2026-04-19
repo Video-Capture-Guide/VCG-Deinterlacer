@@ -236,3 +236,4 @@ echo      - Zip the folder:   VCG_Deinterlacer_1.0.5.zip
 echo   3. Distribute the ZIP -- users just extract and double-click the EXE.
 echo      Dependencies (FFmpeg + VapourSynth) download automatically on first run.
 echo.
+pause
