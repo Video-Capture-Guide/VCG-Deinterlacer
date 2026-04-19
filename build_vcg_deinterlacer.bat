@@ -16,7 +16,7 @@ REM ============================================================
 
 echo.
 echo ============================================================
-echo  VCG Deinterlacer 1.0.4 - Build Script
+echo  VCG Deinterlacer 1.0.5 - Build Script
 echo ============================================================
 echo.
 
@@ -168,6 +168,7 @@ python -m nuitka ^
     --standalone ^
     --onefile ^
     --onefile-tempdir-spec="{CACHE_DIR}/VCG_Deinterlacer/{VERSION}" ^
+    --assume-yes-for-downloads ^
     --lto=no ^
     --jobs=2 ^
     --windows-console-mode=force ^
@@ -180,11 +181,11 @@ python -m nuitka ^
     %LOGO_OPTION% ^
     --company-name="VideoCaptureGuide" ^
     --product-name="VCG Deinterlacer" ^
-    --file-version="1.0.4.0" ^
-    --product-version="1.0.4.0" ^
+    --file-version="1.0.5.0" ^
+    --product-version="1.0.5.0" ^
     --file-description="VCG Deinterlacer - Analog Video Restoration Tool" ^
     --copyright="Copyright (c) 2026 VideoCaptureGuide" ^
-    --output-filename=VCG_Deinterlacer_1.0.4.exe ^
+    --output-filename=VCG_Deinterlacer_1.0.5.exe ^
     --output-dir=dist ^
     %SOURCE%
 
@@ -192,10 +193,10 @@ REM ── Check by file existence, not errorlevel ─────────�
 REM    Nuitka may exit non-zero on warnings even when the EXE was
 REM    created successfully (e.g. missing Windows Runtime DLLs).
 REM    Checking the output file is the reliable way to tell.
-if not exist "dist\VCG_Deinterlacer_1.0.4.exe" (
+if not exist "dist\VCG_Deinterlacer_1.0.5.exe" (
     echo.
     echo ============================================================
-    echo  BUILD FAILED  ^(dist\VCG_Deinterlacer_1.0.4.exe not produced^)
+    echo  BUILD FAILED  ^(dist\VCG_Deinterlacer_1.0.5.exe not produced^)
     echo ============================================================
     echo.
     echo Common causes:
@@ -216,7 +217,7 @@ echo ============================================================
 echo  BUILD SUCCESSFUL
 echo ============================================================
 echo.
-echo Output:  dist\VCG_Deinterlacer_1.0.4.exe
+echo Output:  dist\VCG_Deinterlacer_1.0.5.exe
 echo.
 echo NOTE: If you see a "Windows Runtime DLLs" warning above, that
 echo       is harmless -- the EXE will work on any machine that has
@@ -224,15 +225,14 @@ echo       the Visual C++ Redistributable installed (Windows 10/11
 echo       ships with it by default).
 echo.
 echo Next steps:
-echo   1. Test the EXE:  dist\VCG_Deinterlacer_1.0.4.exe
+echo   1. Test the EXE:  dist\VCG_Deinterlacer_1.0.5.exe
 echo   2. Package as ZIP (1.0.4 portable -- no installer needed):
-echo      - Create a folder:  VCG_Deinterlacer_1.0.4\
-echo      - Copy into it:     dist\VCG_Deinterlacer_1.0.4.exe
+echo      - Create a folder:  VCG_Deinterlacer_1.0.5\
+echo      - Copy into it:     dist\VCG_Deinterlacer_1.0.5.exe
 echo      -                   logo.png
 echo      -                   README.txt  (rename from README.md)
 echo      -                   LICENSE.txt
-echo      - Zip the folder:   VCG_Deinterlacer_1.0.4.zip
+echo      - Zip the folder:   VCG_Deinterlacer_1.0.5.zip
 echo   3. Distribute the ZIP -- users just extract and double-click the EXE.
 echo      Dependencies (FFmpeg + VapourSynth) download automatically on first run.
 echo.
-pause
