@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.0.4"
-BUILD_DATE = "2026-04-19c"
+BUILD_DATE = "2026-04-19d"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -6802,11 +6802,18 @@ class RestorationWizard(BaseWindow):
             # Verify each candidate with --version to reject MS Store stubs.
             import shutil as _sh
             _sys_py = None
+            _exe_dir = os.path.normcase(os.path.dirname(sys.executable))
             for _cand in ['py', 'python', 'python3']:
                 _p = _sh.which(_cand)
                 if not _p:
                     continue
-                if os.path.normcase(_p) == os.path.normcase(sys.executable):
+                _p_norm = os.path.normcase(_p)
+                if _p_norm == os.path.normcase(sys.executable):
+                    continue
+                # Skip any Python in the same folder as the EXE — that's Nuitka's
+                # embedded python.exe in the onefile extraction directory, not a
+                # real system install.
+                if os.path.normcase(os.path.dirname(_p_norm)) == _exe_dir:
                     continue
                 try:
                     _ver_r = run_hidden([_p, '--version'], timeout=10)
