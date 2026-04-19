@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.0.4"
-BUILD_DATE = "2026-04-19b"
+BUILD_DATE = "2026-04-19c"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -1580,14 +1580,15 @@ def generate_vpy_script(config):
         ct = config.get('crop_top', 0)
         cb_px = config.get('crop_bottom', 0)
         lines.append(f'# Manual crop (left={cl}, right={cr}, top={ct}, bottom={cb_px})')
-        lines.append(f'clip = core.std.Crop(clip, left={cl}, right={cr}, top={ct}, bottom={cb_px})')
+        lines.append(f'_vcg_l, _vcg_r, _vcg_t, _vcg_b = {cl}, {cr}, {ct}, {cb_px}')
+        lines.append('if (clip.width  - _vcg_l - _vcg_r) % 2 != 0: _vcg_r += 1')
+        lines.append('if (clip.height - _vcg_t - _vcg_b) % 2 != 0: _vcg_b += 1')
+        lines.append('clip = core.std.Crop(clip, left=_vcg_l, right=_vcg_r, top=_vcg_t, bottom=_vcg_b)')
         lines.append('')
     # crop_preset == 'none': no crop
 
     # ── Snap to even height (SeparateFields / QTGMC requirement) ─────────────
-    # Manual crops with an odd pixel count produce odd-height clips.
-    # SeparateFields (used inside QTGMC) requires height % 2 == 0.
-    # Trim one extra pixel from the bottom if needed — invisible in practice.
+    # Non-manual presets with odd source height still need this guard.
     lines.append('# Snap height to even number (SeparateFields requires mod 2)')
     lines.append('if clip.height % 2 != 0:')
     lines.append('    clip = core.std.Crop(clip, bottom=1)')
