@@ -1,5 +1,5 @@
 # VCG Deinterlacer
-### Beta-02 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
+by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
 
@@ -7,9 +7,9 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 
 ## Download
 
-**[Download VCG_Deinterlacer.exe — Beta-02](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
+**[Download VCG_Deinterlacer](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
 
-Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
+Double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
 
 ---
 
@@ -23,8 +23,9 @@ Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launc
 - **Multiple output formats** — ProRes HQ, H.264, FFV1 (lossless), and more
 - **PAR correction** — automatically converts non-square pixels to square for NTSC and PAL
 - **Temporal denoising** — optional SMDegrain for noisy VHS footage
+- **Upscaling** — optional upscale to presets with NNEDI3
+- **Mono-to-stereo** — optional fix if your video has audio in only one channel
 - **Color correction** — auto-detects and corrects color casts and saturation issues
-- **Dropout removal** — reduces tape damage artifacts
 - **Comparison video** — generates a side-by-side original vs. enhanced clip
 - **Drag and drop** — drop video files directly onto the app window
 - **Portable** — no installer, no UAC prompt, no admin rights required
