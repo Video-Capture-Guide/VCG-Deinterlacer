@@ -11,13 +11,10 @@ echo ============================================================
 echo  VCG Deinterlacer - Clean Build
 echo ============================================================
 echo.
-echo Deleting Nuitka build folders in dist\...
+echo Deleting dist\ folder entirely...
 
-REM ── Local build output folders ────────────────────────────────
-rmdir /s /q "dist\vcg_deinterlacer_v104.build"      2>nul
-rmdir /s /q "dist\vcg_deinterlacer_v104.dist"       2>nul
-rmdir /s /q "dist\vcg_deinterlacer_v104.onefile-build" 2>nul
-del /f /q   "dist\VCG_Deinterlacer_1.0.4.exe"      2>nul
+REM ── Wipe entire dist folder (catches any version name) ────────
+rmdir /s /q "dist" 2>nul
 
 echo Deleting Nuitka global cache in AppData...
 
