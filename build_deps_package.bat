@@ -594,7 +594,7 @@ echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
 echo       Tag: v7
 echo       Asset filename: vcg-deps-v7.zip
 echo.
-echo  2. Update DEPS_VERSION = '7' and DEPS_ZIP_URL in vcg_deinterlacer_beta06.py:
+echo  2. Update DEPS_VERSION = '7' and DEPS_ZIP_URL in vcg_deinterlacer_v107.py:
 echo       .../releases/download/v7/vcg-deps-v7.zip
 echo.
 echo  3. Rebuild the app EXE with build_vcg_deinterlacer.bat
