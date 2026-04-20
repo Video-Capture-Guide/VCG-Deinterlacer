@@ -15,11 +15,11 @@ REM         VapourSynth R74 automatically.
 REM
 REM  Run this ONCE on your dev machine to produce:
 REM
-REM    vcg-deps-v7.zip   (~50-80 MB)
+REM    vcg-deps-v8.zip   (~50-80 MB)
 REM
-REM  Then upload vcg-deps-v7.zip as a GitHub Release asset at:
+REM  Then upload vcg-deps-v8.zip as a GitHub Release asset at:
 REM    https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
-REM    Tag: v7    Asset filename: vcg-deps-v7.zip
+REM    Tag: v8    Asset filename: vcg-deps-v8.zip
 REM
 REM  The app will download this single file on first launch
 REM  and extract it to  _deps\  next to the EXE.
@@ -28,14 +28,14 @@ REM ============================================================
 
 echo.
 echo ============================================================
-echo  VCG Deinterlacer - Portable Deps Builder (v7)
+echo  VCG Deinterlacer - Portable Deps Builder (v8)
 echo ============================================================
 echo.
 
 REM ── Working directories ───────────────────────────────────────
 set SCRIPT_DIR=%~dp0
 set BUILD_DIR=%SCRIPT_DIR%deps_build
-set OUT_DIR=%BUILD_DIR%\vcg-deps-v7
+set OUT_DIR=%BUILD_DIR%\vcg-deps-v8
 set VS_OUT=%OUT_DIR%\vs
 set FF_OUT=%OUT_DIR%\ffmpeg
 
@@ -497,10 +497,30 @@ if !FOUND_WEIGHTS!==0 (
     set PLUGIN_MISSING=1
 )
 
+REM ── vivtc (required for Inverse Telecine / IVTC feature) ─────────────────
+set FOUND_VIVTC=0
+for %%S in ("%PLUGIN_SRC1%" "%PLUGIN_SRC2%" "%PLUGIN_SRC3%") do (
+    if !FOUND_VIVTC!==0 if exist "%%~S\vivtc.dll" (
+        copy "%%~S\vivtc.dll" "%PLUGIN_DEST%\"
+        echo   Copied vivtc.dll
+        set FOUND_VIVTC=1
+    )
+    if !FOUND_VIVTC!==0 if exist "%%~S\libvivtc.dll" (
+        copy "%%~S\libvivtc.dll" "%PLUGIN_DEST%\"
+        echo   Copied libvivtc.dll
+        set FOUND_VIVTC=1
+    )
+)
+if !FOUND_VIVTC!==0 (
+    echo   WARNING: vivtc.dll not found. Inverse Telecine ^(IVTC^) will fail at runtime.
+    echo   Install with:  vsrepo install vivtc
+    set PLUGIN_MISSING=1
+)
+
 if "%PLUGIN_MISSING%"=="1" (
     echo.
     echo   Some plugins were not found. Make sure these are installed:
-    echo     vsrepo install lsmas mvtools fmtconv
+    echo     vsrepo install lsmas mvtools fmtconv vivtc
     echo   Then re-run this script.
     pause
     exit /b 1
@@ -551,7 +571,7 @@ echo   FFmpeg ready.
 
 REM ── Write version marker ──────────────────────────────────────
 REM NOTE: must use (echo N) — plain "echo N>" is parsed as stdout redirect, not text
-(echo 7) > "%OUT_DIR%\vcg_deps.version"
+(echo 8) > "%OUT_DIR%\vcg_deps.version"
 
 REM ── Portable marker for VapourSynth ─────────────────────────────
 REM VSScript.dll checks for this file to enable portable mode.
@@ -562,9 +582,9 @@ echo   portable.vs marker created.
 
 REM ── Create ZIP ────────────────────────────────────────────────
 echo.
-echo Creating vcg-deps-v7.zip...
+echo Creating vcg-deps-v8.zip...
 
-set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v7.zip
+set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v8.zip
 if exist "%OUT_ZIP%" del "%OUT_ZIP%"
 
 powershell -NoProfile -NonInteractive -Command ^
@@ -579,7 +599,7 @@ if not exist "%OUT_ZIP%" (
 for %%F in ("%OUT_ZIP%") do (
     set /a ZIP_MB=%%~zF / 1048576
 )
-echo Done! Created: vcg-deps-v7.zip  (!ZIP_MB! MB)
+echo Done! Created: vcg-deps-v8.zip  (!ZIP_MB! MB)
 
 REM ── Cleanup ───────────────────────────────────────────────────
 rmdir /s /q "%BUILD_DIR%"
@@ -589,13 +609,13 @@ echo ============================================================
 echo  NEXT STEPS:
 echo ============================================================
 echo.
-echo  1. Upload vcg-deps-v7.zip to GitHub as a release asset:
+echo  1. Upload vcg-deps-v8.zip to GitHub as a release asset:
 echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
-echo       Tag: v7
-echo       Asset filename: vcg-deps-v7.zip
+echo       Tag: v8
+echo       Asset filename: vcg-deps-v8.zip
 echo.
-echo  2. Update DEPS_VERSION = '7' and DEPS_ZIP_URL in vcg_deinterlacer_v107.py:
-echo       .../releases/download/v7/vcg-deps-v7.zip
+echo  2. Update DEPS_VERSION = '8' and DEPS_ZIP_URL in vcg_deinterlacer_v109.py:
+echo       .../releases/download/v8/vcg-deps-v8.zip
 echo.
 echo  3. Rebuild the app EXE with build_vcg_deinterlacer.bat
 echo.
