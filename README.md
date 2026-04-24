@@ -70,7 +70,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ## Installation
 
-1. Download `VCG_Deinterlacer_v1.0.4.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+1. Download `VCG_Deinterlacer_1.0.11.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
@@ -193,6 +193,11 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
+| v1.0.11 | 2026-04-24 | Fix: Nuitka extraction python.exe selected for retry 3A on some machines — now strips extraction dir from PATH before search (three-layer guard) |
+| v1.0.10 | 2026-04-23 | Fix: 8.3 short-path (VCG_DE~1) caused [WinError 2] when selecting system Python for retry 3A |
+| v1.0.9  | 2026-04-20 | Fix: vivtc.dll missing from deps bundle (IVTC/Inverse Telecine failed on clean installs); deps upgraded to v8 |
+| v1.0.8  | 2026-04-20 | Fix: false MISS for VapourSynth.dll in diagnostic (R74 renamed it to libvapoursynth.dll) |
+| v1.0.7  | 2026-04-19 | Fix: Python 3.13+ support via VapourSynth R74+ in deps bundle (R73 only supported 3.8–3.12) |
 | v1.0.4  | 2026-04-19 | Release: Python 3.13+ VSScript fallback; manual crop mod-2 width/height auto-correction |
 | Beta-03b | 2026-04-19 | Fix odd-width crash from manual crop (YUV422 mod-2 width constraint) |
 | Beta-03a | 2026-04-19 | Fix odd-height crash from manual crop (SeparateFields mod-2 height constraint) |
