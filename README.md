@@ -70,7 +70,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ## Installation
 
-1. Download `VCG_Deinterlacer_1.0.12.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+1. Download `VCG_Deinterlacer_1.0.13.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
@@ -193,6 +193,7 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
+| v1.0.13 | 2026-04-24 | Fix: bundled python.exe ctypes smoke-test — if bundled python fails _ctypes DLL load, app automatically falls back to system Python |
 | v1.0.12 | 2026-04-24 | Fix: bundle python.exe in deps v9 — app no longer requires system Python to be installed (self-contained runtime) |
 | v1.0.11 | 2026-04-24 | Fix: Nuitka extraction python.exe selected for retry 3A on some machines — now strips extraction dir from PATH before search (three-layer guard) |
 | v1.0.10 | 2026-04-23 | Fix: 8.3 short-path (VCG_DE~1) caused [WinError 2] when selecting system Python for retry 3A |
