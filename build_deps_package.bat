@@ -15,11 +15,11 @@ REM         VapourSynth R74 automatically.
 REM
 REM  Run this ONCE on your dev machine to produce:
 REM
-REM    vcg-deps-v8.zip   (~50-80 MB)
+REM    vcg-deps-v10.zip   (~50-80 MB)
 REM
-REM  Then upload vcg-deps-v8.zip as a GitHub Release asset at:
+REM  Then upload vcg-deps-v10.zip as a GitHub Release asset at:
 REM    https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
-REM    Tag: v8    Asset filename: vcg-deps-v8.zip
+REM    Tag: v10    Asset filename: vcg-deps-v10.zip
 REM
 REM  The app will download this single file on first launch
 REM  and extract it to  _deps\  next to the EXE.
@@ -28,14 +28,14 @@ REM ============================================================
 
 echo.
 echo ============================================================
-echo  VCG Deinterlacer - Portable Deps Builder (v8)
+echo  VCG Deinterlacer - Portable Deps Builder (v10)
 echo ============================================================
 echo.
 
 REM ── Working directories ───────────────────────────────────────
 set SCRIPT_DIR=%~dp0
 set BUILD_DIR=%SCRIPT_DIR%deps_build
-set OUT_DIR=%BUILD_DIR%\vcg-deps-v8
+set OUT_DIR=%BUILD_DIR%\vcg-deps-v10
 set VS_OUT=%OUT_DIR%\vs
 set FF_OUT=%OUT_DIR%\ffmpeg
 
@@ -270,8 +270,20 @@ REM Copy python stdlib zip and pyd files to VS_OUT
 echo   Copying Python stdlib...
 copy "%PY_EMBED_DIR%\python%PYTHON_VER%.zip"  "%VS_OUT%\" 2>nul
 copy "%PY_EMBED_DIR%\python3.dll"              "%VS_OUT%\" 2>nul
+REM Copy python.exe — added in v9, carried forward.  This turns _deps/vs/ into a
+REM self-contained Python runtime so the app never needs system Python.
+copy "%PY_EMBED_DIR%\python.exe"              "%VS_OUT%\"
+if not exist "%VS_OUT%\python.exe" (
+    echo   WARNING: python.exe not found in embeddable package.
+    echo            The app will fall back to searching for system Python.
+) else (
+    echo   Copied python.exe ^(self-contained runtime enabled^)
+)
+
 REM Copy extension pyd files needed by Python/VapourSynth scripts
 for %%F in ("%PY_EMBED_DIR%\*.pyd") do copy "%%F" "%VS_OUT%\" 2>nul
+REM Copy ALL DLLs from embeddable package (covers libffi-8.dll for Python 3.13+ ctypes)
+for %%F in ("%PY_EMBED_DIR%\*.dll") do copy "%%F" "%VS_OUT%\" 2>nul
 
 REM Write the _pth file to enable site-packages in embeddable mode
 echo python%PYTHON_VER%.zip>  "%VS_OUT%\python%PYTHON_VER%._pth"
@@ -571,7 +583,7 @@ echo   FFmpeg ready.
 
 REM ── Write version marker ──────────────────────────────────────
 REM NOTE: must use (echo N) — plain "echo N>" is parsed as stdout redirect, not text
-(echo 8) > "%OUT_DIR%\vcg_deps.version"
+(echo 10) > "%OUT_DIR%\vcg_deps.version"
 
 REM ── Portable marker for VapourSynth ─────────────────────────────
 REM VSScript.dll checks for this file to enable portable mode.
@@ -582,9 +594,9 @@ echo   portable.vs marker created.
 
 REM ── Create ZIP ────────────────────────────────────────────────
 echo.
-echo Creating vcg-deps-v8.zip...
+echo Creating vcg-deps-v10.zip...
 
-set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v8.zip
+set OUT_ZIP=%SCRIPT_DIR%vcg-deps-v10.zip
 if exist "%OUT_ZIP%" del "%OUT_ZIP%"
 
 powershell -NoProfile -NonInteractive -Command ^
@@ -599,7 +611,7 @@ if not exist "%OUT_ZIP%" (
 for %%F in ("%OUT_ZIP%") do (
     set /a ZIP_MB=%%~zF / 1048576
 )
-echo Done! Created: vcg-deps-v8.zip  (!ZIP_MB! MB)
+echo Done! Created: vcg-deps-v10.zip  (!ZIP_MB! MB)
 
 REM ── Cleanup ───────────────────────────────────────────────────
 rmdir /s /q "%BUILD_DIR%"
@@ -609,13 +621,13 @@ echo ============================================================
 echo  NEXT STEPS:
 echo ============================================================
 echo.
-echo  1. Upload vcg-deps-v8.zip to GitHub as a release asset:
+echo  1. Upload vcg-deps-v10.zip to GitHub as a release asset:
 echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
 echo       Tag: v8
-echo       Asset filename: vcg-deps-v8.zip
+echo       Asset filename: vcg-deps-v10.zip
 echo.
-echo  2. Update DEPS_VERSION = '8' and DEPS_ZIP_URL in vcg_deinterlacer_v109.py:
-echo       .../releases/download/v8/vcg-deps-v8.zip
+echo  2. DEPS_VERSION = '10' is already set in vcg_deinterlacer_v114.py
+echo       .../releases/download/v10/vcg-deps-v10.zip
 echo.
 echo  3. Rebuild the app EXE with build_vcg_deinterlacer.bat
 echo.
