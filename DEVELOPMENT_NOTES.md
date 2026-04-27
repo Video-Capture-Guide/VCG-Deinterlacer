@@ -10,7 +10,7 @@ root cause, and the fix that worked. Read this before making any changes.
 
 | File | Purpose |
 |------|---------|
-| `vcg_deinterlacer_v105.py` | Main application — all logic lives here (see naming convention below) |
+| `vcg_deinterlacer_v116.py` | Main application — all logic lives here (see naming convention below) |
 | `build_vcg_deinterlacer.bat` | Nuitka compile script |
 | `clean_build.bat` | Wipes Nuitka artifacts before a fresh compile |
 | `BUILD_INSTRUCTIONS.md` | Step-by-step build and release guide |
@@ -408,26 +408,164 @@ picture content, not noise).
 
 ---
 
+## Problem 11 — Nuitka PATH Pollution: Bundled Python ctypes Always Fails
+
+**Symptom:** Smoke test `python.exe -c "import ctypes; print('ok')"` returns
+non-zero even though `libffi-8.dll` is present in `_deps\vs\`.
+
+**Root cause:** Nuitka onefile adds its extraction directory
+(`%LOCALAPPDATA%\VCG_Deinterlacer\{VERSION}\` or the 8.3 form `VCG_DE~1\`)
+to PATH. This extraction dir contains Nuitka's own Python proxy DLLs, which
+conflict with the real `python3XX.dll` when the bundled `python.exe` loads
+`_ctypes.pyd`.
+
+**Fix:** Strip all PATH entries that start with the `%LOCALAPPDATA%\vcg_`
+prefix before launching any subprocess that needs clean DLL resolution.
+The `_filtered_path_for(base_path, prepend=())` helper does this. Always
+pass `env=_bundled_env` (with filtered PATH) to the ctypes smoke test and
+to any Python-direct retry.
+
+**Implementation:** The `_filtered_path_for()` helper and `_bundled_env`
+construction live inside the retry-3 block. They are reused for all
+Python-direct retries (3A and 3B).
+
+---
+
+## Problem 12 — Missing libffi-8.dll: ctypes Import Fails on Python 3.13+
+
+**Symptom:** Bundled `python.exe` smoke test fails with:
+```
+ImportError: DLL load failed while importing _ctypes: The specified module could not be found.
+```
+
+**Root cause:** Python 3.13+ externalised `libffi` as a separate DLL
+(`libffi-8.dll`). The `build_deps_package.bat` script only copied `*.pyd`
+files from the embeddable package, not `*.dll` files, so `libffi-8.dll`
+was never included in the deps bundle.
+
+**Fix:** Add this line to `build_deps_package.bat` after copying `*.pyd`:
+```batch
+for %%F in ("%PY_EMBED_DIR%\*.dll") do copy "%%F" "%VS_OUT%\" 2>nul
+```
+Bump `DEPS_VERSION` to trigger re-download on existing installs.
+
+---
+
+## Problem 13 — Wrong sys.executable Fallback: Nuitka Proxy Instead of Real Python
+
+**Symptom:** Python-direct retry (3A/3B) fails immediately with a cryptic
+import error, even though system Python is installed.
+
+**Root cause:** When running as a Nuitka onefile EXE, `sys.executable` is the
+Nuitka extraction proxy, not a real `python.exe`. Using it as the interpreter
+for `subprocess.run([sys.executable, '-c', wrapper])` silently invokes the
+proxy, which cannot import VapourSynth.
+
+**Fix:** Priority 3 (last resort) must use the bundled `python.exe` explicitly:
+```python
+if _bundled_py and os.path.isfile(_bundled_py):
+    _sys_py = _bundled_py
+else:
+    _sys_py = sys.executable  # running from source only
+```
+Never use `sys.executable` as a fallback when compiled with Nuitka.
+
+---
+
+## Problem 14 — Batch Processing: PID-based Temp Files Cause PermissionError
+
+**Symptom:** In a large batch (e.g. 199 files), ~60% of files fail with:
+```
+PermissionError: [Errno 13] Permission denied: 'D:\Photos\2002\temp_48384.y4m'
+```
+The same file processed alone (new invocation) succeeds.
+
+**Root cause:** All files in a batch run in the same process (same PID). The
+temp file was named `temp_{os.getpid()}.y4m` in the *source folder*. When one
+file's vspipe crashed and left the temp file locked, all subsequent files tried
+to write to the *same path* and hit PermissionError. Also, some source folders
+are on read-only drives.
+
+**Fix:** Use `tempfile.mktemp(suffix='.y4m', prefix='vcg_')` — this generates
+a unique path in `%TEMP%` (system temp folder) for every file, eliminating
+both the shared-name collision and the source-folder write permission issue.
+The same fix applies to the audio temp file.
+
+---
+
+## Problem 15 — Disk Space Exhaustion: Temp y4m File Is Enormous
+
+**Symptom:** Processing fails after ~1h47m with:
+```
+OSError: [Errno 28] No space left on device
+```
+The user had 253 GB free on C:, but the job was a 31-minute 1440×1080
+YUV422P8 capture with nnedi3 upscale (doubles fps via QTGMC).
+
+**Root cause:** QTGMC doubles the frame rate (50i → 100fps). The intermediate
+y4m file for a 31-minute clip at 1440×1080 YUV422P8 @ 100fps:
+- 1440 × 1080 × 3 bytes (YUV422P8 ~= 3 bytes/pixel) × 100fps × 1860s ≈ 275 GB
+- Written to `%TEMP%` (C: drive), which only had 253 GB free.
+
+**Fix (v1.0.16):** Pipe vspipe stdout directly into FFmpeg stdin using
+`subprocess.Popen`. The `_run_piped(prod_cmd, cons_cmd, ...)` helper handles
+this. The intermediate y4m file is eliminated entirely — disk usage drops
+to zero for the intermediate step.
+
+Key implementation details:
+- vspipe output flag: `temp_y4m` path → `-` (stdout)
+- FFmpeg input flag: `'-i', temp_y4m` → `'-i', 'pipe:0'`
+- Python-direct wrappers (3A/3B): `open(temp_y4m, 'wb')` → `sys.stdout.buffer`
+- `_run_piped()` must set `prod.stdout.close()` *after* passing it to cons,
+  so the producer receives SIGPIPE if the consumer exits early (FFmpeg error).
+- `result.returncode` = producer_rc if producer failed, else consumer_rc.
+  This preserves the "Failed to initialize VSScript" detection in stderr.
+
+---
+
+## Problem 16 — Git Tracking Ref After PAT Push
+
+**Symptom:** After a successful PAT push, `git status` still shows
+"Your branch is ahead of 'origin/main' by N commits."
+
+**Root cause:** When pushing with an inlined PAT URL
+(`git push "https://user:TOKEN@github.com/..."`) while the configured
+remote URL is a proxy that returns 403, git does not update the tracking
+ref for `origin/main`.
+
+**Fix:**
+```bash
+git fetch origin <branch>
+git branch --set-upstream-to=origin/<branch>
+```
+Or permanently fix the remote URL so normal pushes work:
+```bash
+git remote set-url origin "https://Video-Capture-Guide:<PAT>@github.com/Video-Capture-Guide/VCG-Deinterlacer.git"
+```
+
+---
+
 ## Build & Release Checklist
 
 Before compiling a new release:
-1. Update `BUILD_DATE` at the top of `vcg_deinterlacer_v104.py`
-2. Update `VERSION` if this is a version bump
-3. Update `--file-version` and `--product-version` in `build_vcg_deinterlacer.bat`
-4. Update `--output-filename` in `build_vcg_deinterlacer.bat`
-5. Run `clean_build.bat` to wipe ALL Nuitka artifacts
-6. Run `build_vcg_deinterlacer.bat`
-7. Test the EXE on a machine WITHOUT the source Python installed
-   (use the compiled EXE, not `python vcg_deinterlacer_v104.py`)
-8. Test on Python 3.13+ if possible (to verify the pip fallback works)
-9. Create GitHub Release, attach the ZIP
-10. Upload ZIP contains: EXE + logo.png + README.txt + LICENSE.txt
+1. Copy current `.py` to `vcg_deinterlacer_vNNN.py` (increment number)
+2. Update `VERSION`, `BUILD_DATE` at the top of the new `.py` file
+3. Update `--file-version`, `--product-version`, `--output-filename` in `build_vcg_deinterlacer.bat`
+4. Update `set SOURCE=vcg_deinterlacer_vNNN.py` in `build_vcg_deinterlacer.bat`
+5. Add new version entry to `clean_build.bat`
+6. Run `clean_build.bat` to wipe ALL Nuitka artifacts
+7. Run `build_vcg_deinterlacer.bat`
+8. Test the EXE on a machine WITHOUT the source Python installed
+   (use the compiled EXE, not `python vcg_deinterlacer_v116.py`)
+9. Test on Python 3.13+ if possible (to verify the pip fallback works)
+10. Create GitHub Release, attach the ZIP
+11. Upload ZIP contains: EXE + logo.png + README.txt + LICENSE.txt
 
 ---
 
 ## Deps Package Notes
 
-The portable deps bundle is `vcg-deps-v6.zip` hosted on the
+The portable deps bundle is `vcg-deps-v10.zip` hosted on the
 `vcg-deinterlacer-deps` GitHub repo (separate repo). It contains:
 - FFmpeg (ffmpeg.exe, ffprobe.exe)
 - VapourSynth R73 portable runtime (vspipe.exe, python314.dll, etc.)
@@ -438,7 +576,7 @@ The portable deps bundle is `vcg-deps-v6.zip` hosted on the
 **To update the deps bundle:**
 1. Build new ZIP using `build_deps_package.bat` (in the deps repo)
 2. Upload to `vcg-deinterlacer-deps` GitHub Releases as a new tag (v7, v8, …)
-3. Bump `DEPS_VERSION` and `DEPS_ZIP_URL` in `vcg_deinterlacer_v104.py`
+3. Bump `DEPS_VERSION` and `DEPS_ZIP_URL` in the current `vcg_deinterlacer_vNNN.py`
 4. Rebuild the EXE
 
 **nnedi3 is already in the deps bundle** — `libnnedi3.dll` and
