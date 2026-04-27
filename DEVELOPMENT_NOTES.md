@@ -6,6 +6,47 @@ root cause, and the fix that worked. Read this before making any changes.
 
 ---
 
+## Pending Changes for Next Release
+
+These are confirmed, scoped changes to implement in the next version bump:
+
+**1. Fix duplicate FFmpeg output in diagnostic log**
+
+When retry 3A (or 3B) succeeds, the FFmpeg progress log appears twice: once
+under `[python-direct-3a-result stderr]` and again under `[pipe stderr]`.
+Root cause: `_run_piped()` combines producer+consumer stderr into `result.stderr`,
+and the diag logger captures it at both the per-retry checkpoint and the final
+success point. Fix: at the final `diag.captured("pipe", ...)` call, log only
+`result.producer_stderr` (python side) rather than the combined stderr, since
+the consumer (FFmpeg) stderr was already captured in the retry section.
+
+**2. Change output filename suffix to `_VCGD_YYYYMMDD`**
+
+Currently output files are named `INPUT_VCG-Deinterlacer_01.mov` (with a
+sequential counter). Change to `INPUT_VCGD_YYYYMMDD.mov` where `YYYYMMDD`
+is today's date (e.g. `NTSC_SD_VCGD_20260427.mov`). If a file with that name
+already exists, append `_02`, `_03`, etc. The `.vpy` script file should use
+the same naming.
+
+The suffix is built at the point where `output_path` and `script_path` are
+determined (currently around the counter loop that increments `_VCG-Deinterlacer_01`).
+Replace with:
+```python
+import datetime as _dt
+_date_str = _dt.date.today().strftime('%Y%m%d')
+_base_suffix = f"_VCGD_{_date_str}"
+counter = 1
+while True:
+    suffix = _base_suffix if counter == 1 else f"{_base_suffix}_{counter:02d}"
+    output_path = input_path.parent / (input_path.stem + suffix + output_ext)
+    script_path = input_path.parent / (input_path.stem + suffix + '.vpy')
+    if not output_path.exists() and not script_path.exists():
+        break
+    counter += 1
+```
+
+---
+
 ## Codebase Quick Reference
 
 | File | Purpose |
