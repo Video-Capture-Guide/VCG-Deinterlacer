@@ -20,41 +20,7 @@ success point. Fix: at the final `diag.captured("pipe", ...)` call, log only
 `result.producer_stderr` (python side) rather than the combined stderr, since
 the consumer (FFmpeg) stderr was already captured in the retry section.
 
-**3. Add Blackmagic Intensity D1 NTSC crop preset + fix 720×486 height detection**
-
-Blackmagic Intensity captures at 720×486 (D1 full-raster NTSC) and stores files
-with incorrect square-pixel (PAR=1.000) metadata. Users processing Blackmagic
-captures need a specific crop that the current presets don't cover.
-
-**Why 720×486:**
-D1 NTSC packs blanking into the active frame — 720×486 contains:
-- 704 active columns + 8 blanking left + 8 blanking right
-- 480 active lines + 3 blanking top + 3 blanking bottom
-After removing blanking: 704×480 at PAR 10:11 = exactly 4:3.
-
-**What to add:**
-A new crop preset "Blackmagic D1 (720×486)" that applies:
-- Left: 8, Right: 8, Top: 3, Bottom: 3
-
-This preset should only appear / be selectable when the detected input
-resolution is 720×486. It can live alongside the existing NTSC overscan
-presets. The PAR correction (SAR 10:11) that already applies to SD NTSC
-is correct for this source — no change needed there.
-
-Also consider: auto-detecting 720×486 input and defaulting to this preset
-rather than requiring the user to find it manually.
-
-**Bug: app normalizes source height to 480 for NTSC SD, ignoring actual height.**
-When source is 720×486, the "Output size" display and SAR metadata calculations
-use 480 as the base instead of 486. With a manual crop of top=3/bottom=3:
-- App shows: 704×474 (incorrect — 480−3−3=474)
-- Correct:   704×480 (correct — 486−3−3=480)
-The VapourSynth crop itself is applied to real frames so the encoded output is
-correct, but the display is misleading and SAR may be computed against the wrong
-height. Fix: read actual source height from FFprobe and use it everywhere
-(output size display, SAR calculation, crop validation).
-
-
+**2. Change output filename suffix to `_VCGD_YYYYMMDD`**
 
 Currently output files are named `INPUT_VCG-Deinterlacer_01.mov` (with a
 sequential counter). Change to `INPUT_VCGD_YYYYMMDD.mov` where `YYYYMMDD`
@@ -78,6 +44,41 @@ while True:
         break
     counter += 1
 ```
+
+**3. Add Blackmagic Intensity D1 NTSC capture method + fix 720×486 height detection**
+
+Blackmagic Intensity captures at 720×486 (D1 full-raster NTSC) and stores files
+with incorrect square-pixel (PAR=1.000) metadata. The current capture method
+options (SD / DV) don't handle this format correctly.
+
+**Why 720×486 is different:**
+D1 NTSC packs blanking into the active frame — 720×486 contains:
+- 704 active columns + 8 blanking left + 8 blanking right
+- 480 active lines + 3 blanking top + 3 blanking bottom
+After removing blanking: 704×480 at PAR 10:11 = exactly 4:3.
+With DV selected and no crop, PAR correction targets 640×480 from 720×480 —
+wrong starting height for a 720×486 source.
+
+**What to add — capture method option:**
+Add "Blackmagic D1" as a third capture method option alongside SD and DV
+in the Source step. When selected:
+- Auto-set default crop to Left=8, Right=8, Top=3, Bottom=3
+- Use actual detected height (486) for output size display and SAR calculation
+- PAR correction path: 704×480 → resize to 640×480 (same as SD cropped path,
+  which is already correct — no new PAR logic needed)
+- Auto-detect: if FFprobe reports height=486, default capture method to
+  "Blackmagic D1" and show a note explaining why
+
+**Bug to fix at the same time — app normalizes source height to 480:**
+When source is 720×486, the "Output size" display uses 480 as base height
+instead of 486. With manual crop top=3/bottom=3:
+- App shows: 704×474 (wrong — 480−3−3=474)
+- Correct:   704×480 (right — 486−3−3=480)
+The VapourSynth crop is applied to real frames so encoded output is correct,
+but the display is misleading. Fix: read actual source height from FFprobe
+and use it for output size display, SAR calculation, and crop validation.
+
+
 
 ---
 
