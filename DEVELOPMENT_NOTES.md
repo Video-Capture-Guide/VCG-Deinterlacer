@@ -20,7 +20,7 @@ success point. Fix: at the final `diag.captured("pipe", ...)` call, log only
 `result.producer_stderr` (python side) rather than the combined stderr, since
 the consumer (FFmpeg) stderr was already captured in the retry section.
 
-**3. Add Blackmagic Intensity D1 NTSC crop preset**
+**3. Add Blackmagic Intensity D1 NTSC crop preset + fix 720×486 height detection**
 
 Blackmagic Intensity captures at 720×486 (D1 full-raster NTSC) and stores files
 with incorrect square-pixel (PAR=1.000) metadata. Users processing Blackmagic
@@ -43,6 +43,16 @@ is correct for this source — no change needed there.
 
 Also consider: auto-detecting 720×486 input and defaulting to this preset
 rather than requiring the user to find it manually.
+
+**Bug: app normalizes source height to 480 for NTSC SD, ignoring actual height.**
+When source is 720×486, the "Output size" display and SAR metadata calculations
+use 480 as the base instead of 486. With a manual crop of top=3/bottom=3:
+- App shows: 704×474 (incorrect — 480−3−3=474)
+- Correct:   704×480 (correct — 486−3−3=480)
+The VapourSynth crop itself is applied to real frames so the encoded output is
+correct, but the display is misleading and SAR may be computed against the wrong
+height. Fix: read actual source height from FFprobe and use it everywhere
+(output size display, SAR calculation, crop validation).
 
 
 
