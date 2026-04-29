@@ -20,7 +20,31 @@ success point. Fix: at the final `diag.captured("pipe", ...)` call, log only
 `result.producer_stderr` (python side) rather than the combined stderr, since
 the consumer (FFmpeg) stderr was already captured in the retry section.
 
-**2. Change output filename suffix to `_VCGD_YYYYMMDD`**
+**3. Add Blackmagic Intensity D1 NTSC crop preset**
+
+Blackmagic Intensity captures at 720×486 (D1 full-raster NTSC) and stores files
+with incorrect square-pixel (PAR=1.000) metadata. Users processing Blackmagic
+captures need a specific crop that the current presets don't cover.
+
+**Why 720×486:**
+D1 NTSC packs blanking into the active frame — 720×486 contains:
+- 704 active columns + 8 blanking left + 8 blanking right
+- 480 active lines + 3 blanking top + 3 blanking bottom
+After removing blanking: 704×480 at PAR 10:11 = exactly 4:3.
+
+**What to add:**
+A new crop preset "Blackmagic D1 (720×486)" that applies:
+- Left: 8, Right: 8, Top: 3, Bottom: 3
+
+This preset should only appear / be selectable when the detected input
+resolution is 720×486. It can live alongside the existing NTSC overscan
+presets. The PAR correction (SAR 10:11) that already applies to SD NTSC
+is correct for this source — no change needed there.
+
+Also consider: auto-detecting 720×486 input and defaulting to this preset
+rather than requiring the user to find it manually.
+
+
 
 Currently output files are named `INPUT_VCG-Deinterlacer_01.mov` (with a
 sequential counter). Change to `INPUT_VCGD_YYYYMMDD.mov` where `YYYYMMDD`
