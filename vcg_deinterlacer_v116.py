@@ -999,6 +999,88 @@ def detect_par_format(filepath):
         pass
     return result
 
+def classify_source(filepath):
+    """Classify a video file as SD, AVCHD, or HDV by probing codec and resolution.
+
+    Returns a dict with keys:
+      source_class : 'sd' | 'avchd' | 'hdv' | 'unknown'
+      display_name : human-readable string
+      codec        : raw codec_name from ffprobe
+      width, height: integers
+      fps          : float
+      field_order  : 'tff' | 'bff' | 'unknown'
+      par_needed   : bool — True only for HDV 1440x1080 (needs 1920x1080 scale)
+
+    Classification rules:
+      h264   + height 1080              → avchd
+      mpeg2video + height 1080 + w 1440 → hdv
+      anything else                     → sd
+    """
+    result = {
+        'source_class': 'sd',
+        'display_name': 'SD Interlaced',
+        'codec': '',
+        'width': 0,
+        'height': 0,
+        'fps': 0.0,
+        'field_order': 'unknown',
+        'par_needed': False,
+    }
+    try:
+        cmd = [
+            FFPROBE_PATH, '-v', 'quiet', '-print_format', 'json',
+            '-show_streams', '-select_streams', 'v:0', filepath
+        ]
+        probe = run_hidden(cmd, timeout=30)
+        if probe.returncode != 0:
+            return result
+        data = json.loads(probe.stdout)
+        streams = data.get('streams', [])
+        if not streams:
+            return result
+        s = streams[0]
+
+        codec = s.get('codec_name', '').lower()
+        width = s.get('width', 0)
+        height = s.get('height', 0)
+        fps_parts = s.get('r_frame_rate', '30/1').split('/')
+        try:
+            fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 else 30.0
+        except (ZeroDivisionError, ValueError):
+            fps = 30.0
+        fo_raw = s.get('field_order', '').lower()
+
+        result['codec'] = codec
+        result['width'] = width
+        result['height'] = height
+        result['fps'] = fps
+
+        if fo_raw in ('tt', 'tff'):
+            result['field_order'] = 'tff'
+        elif fo_raw in ('bb', 'bff'):
+            result['field_order'] = 'bff'
+
+        if codec == 'h264' and height == 1080:
+            result['source_class'] = 'avchd'
+            result['display_name'] = 'AVCHD / MTS (1080i)'
+            if result['field_order'] == 'unknown':
+                result['field_order'] = 'tff'
+            result['par_needed'] = False
+        elif codec == 'mpeg2video' and height == 1080 and width == 1440:
+            result['source_class'] = 'hdv'
+            result['display_name'] = 'HDV (1080i)'
+            if result['field_order'] == 'unknown':
+                result['field_order'] = 'tff'
+            result['par_needed'] = True
+        else:
+            result['source_class'] = 'sd'
+            result['display_name'] = 'SD Interlaced'
+
+    except Exception:
+        pass
+    return result
+
+
 def analyze_video_levels(filepath, sample_frames=10):
     """Analyze video levels to detect out-of-range values."""
     try:
@@ -1604,8 +1686,13 @@ def generate_vpy_script(config):
     
     # ── Crop ─────────────────────────────────────────────────────────────────
     # Four crop presets (Feature 3).  DV defaults to 'none'; SD defaults to 'bt601'.
+    # HD sources (AVCHD/HDV) skip all cropping — set crop_preset to 'none'.
     capture_method = config.get('capture_method', 'sd')
     crop_preset = config.get('crop_preset', 'none' if capture_method == 'dv' else 'bt601')
+    source_class = config.get('source_classification', {}).get('source_class', 'sd')
+    _is_hd = source_class in ('avchd', 'hdv')
+    if _is_hd:
+        crop_preset = 'none'
 
     # SAR metadata is only adjusted for the overscan preset (Option 2).
     # Options:
@@ -1680,6 +1767,17 @@ def generate_vpy_script(config):
         lines[-1] = lines[-1].rstrip(',')
         lines.append(')')
         lines.append('')
+
+    # ── HDV pixel aspect ratio correction (applied right after QTGMC) ────────
+    # HDV records 1440×1080 with non-square pixels (PAR 4:3) that must be
+    # scaled to 1920×1080 square pixels for correct display.
+    # AVCHD is natively 1920×1080 square pixels — no correction needed.
+    if _is_hd and source_class == 'hdv':
+        par_needed = config.get('source_classification', {}).get('par_needed', False)
+        if par_needed:
+            lines.append('# HDV PAR correction: scale 1440x1080 non-square pixels to 1920x1080')
+            lines.append('clip = core.resize.Spline36(clip, width=1920, height=1080)')
+            lines.append('')
 
     # ── Y/C Delay correction (Feature 1) ─────────────────────────────────────
     # Per-file horizontal chroma shift: split planes, shift U+V, merge back.
@@ -1779,7 +1877,7 @@ def generate_vpy_script(config):
             lines.append('# PAR correction → 768×576 square pixels')
             lines.append('clip = core.resize.Spline36(clip, width=768, height=576)')
         lines.append('')
-    elif config.get('par_correction', True) and crop_preset == 'none':
+    elif not _is_hd and config.get('par_correction', True) and crop_preset == 'none':
         # No crop (DV or explicit none): still correct PAR
         if video_format == 'ntsc':
             lines.append('# PAR correction → 640×480 square pixels (no crop path)')
@@ -2399,7 +2497,8 @@ class DropZone(tk.Frame):
         # Handle multiple files - just take the first one
         if '\n' in filepath:
             filepath = filepath.split('\n')[0]
-        if filepath.lower().endswith(('.avi', '.mp4', '.mkv', '.mov', '.m4v', '.mpg', '.mpeg')):
+        if filepath.lower().endswith(('.avi', '.mp4', '.mkv', '.mov', '.m4v', '.mpg', '.mpeg',
+                                       '.mts', '.m2ts', '.m2t', '.ts')):
             self.on_drop(filepath)
         self._on_drag_leave(None)
     
@@ -2538,7 +2637,8 @@ class MultiFileDropZone(tk.Frame):
             filepaths = data.split()
         
         # Filter to video files only
-        valid_extensions = ('.avi', '.mp4', '.mkv', '.mov', '.m4v', '.mpg', '.mpeg')
+        valid_extensions = ('.avi', '.mp4', '.mkv', '.mov', '.m4v', '.mpg', '.mpeg',
+                             '.mts', '.m2ts', '.m2t', '.ts')
         for filepath in filepaths:
             if filepath.lower().endswith(valid_extensions):
                 if filepath not in self.files:
@@ -3258,7 +3358,7 @@ class RestorationWizard(BaseWindow):
         step_methods = [
             self._page_welcome,         # 0
             self._page_select_file,     # 1
-            self._page_source_details,  # 2
+            self._page_source_dispatch,  # 2  SD or HD routing
             self._page_crop_preset,     # 3  Crop Preset
             self._page_yc_delay,        # 4  Advanced ① Y/C Delay
             self._page_noise,           # 5  Advanced ②
@@ -3582,12 +3682,17 @@ class RestorationWizard(BaseWindow):
             # Store SAR string for display on the pages
             self.config_data['detected_sar'] = par_info.get('sar', '')
 
+            # Source classification for HD routing (AVCHD/HDV vs SD)
+            sc = classify_source(files[0])
+            self.config_data['source_classification'] = sc
+
         else:
             self.config_data.pop('input_path', None)
             self.config_data.pop('guessed_format', None)
             self.config_data.pop('auto_format', None)
             self.config_data.pop('auto_capture_method', None)
             self.config_data.pop('detected_sar', None)
+            self.config_data.pop('source_classification', None)
     
     def _browse_files(self):
         # Use last folder if available
@@ -3597,7 +3702,7 @@ class RestorationWizard(BaseWindow):
             title="Select Video Files",
             initialdir=initial_dir if os.path.exists(initial_dir) else '',
             filetypes=[
-                ("Video files", "*.avi *.mp4 *.mkv *.mov *.m4v *.mpg *.mpeg"),
+                ("Video files", "*.avi *.mp4 *.mkv *.mov *.m4v *.mpg *.mpeg *.mts *.m2ts *.m2t *.ts"),
                 ("All files", "*.*")
             ]
         )
@@ -3911,6 +4016,216 @@ class RestorationWizard(BaseWindow):
             no_tc.pack(fill='x', pady=(4, 8))
             tk.Label(no_tc, text="✓ No telecine pattern detected — standard deinterlacing will be used.",
                      font=('Segoe UI', 11), fg=Colors.SUCCESS, bg=Colors.BG_CARD).pack(anchor='w')
+
+    # ── Source Details dispatcher ──────────────────────────────────────────────
+
+    def _page_source_dispatch(self):
+        """Route to the SD or HD Source Details page based on source classification."""
+        sc = self.config_data.get('source_classification', {})
+        if sc.get('source_class') in ('avchd', 'hdv'):
+            self._page_source_details_hd()
+        else:
+            self._page_source_details()
+
+    def _page_source_details_hd(self):
+        """Step 2 — Source Details (HD): for AVCHD/MTS and HDV interlaced sources.
+
+        Mirrors the structure of _page_source_details but without the SD/DV
+        Capture Method section and with HD-appropriate field-order defaults.
+        """
+        # ── Page header ────────────────────────────────────────────────────────
+        tk.Label(self.page_container, text="Source Details (HD)",
+                 font=('Segoe UI', 22, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+        tk.Label(self.page_container, text="Configure your interlaced HD video source.",
+                 font=('Segoe UI', 13),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(2, 20))
+
+        sc = self.config_data.get('source_classification', {})
+
+        def section_hdr_row(number, title, badge_text=None):
+            """Return the header frame; badge_text shown in green if provided."""
+            row = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+            row.pack(fill='x', pady=(0, 6))
+            tk.Label(row, text=str(number) + ". " + title,
+                     font=('Segoe UI', 13, 'bold'),
+                     fg=Colors.ACCENT, bg=Colors.BG_MAIN).pack(side='left')
+            badge_lbl = None
+            if badge_text:
+                badge_lbl = tk.Label(row, text="  ✓ Auto-Detected: " + badge_text,
+                                     font=('Segoe UI', 11, 'bold'),
+                                     fg='#22CC66', bg=Colors.BG_MAIN)
+                badge_lbl.pack(side='right')
+            return badge_lbl
+
+        # ════════════════════════════════════════════════════════════════════
+        # 1 — DETECTED SOURCE  (read-only info card)
+        # ════════════════════════════════════════════════════════════════════
+        section_hdr_row("1", "Detected Source", sc.get('display_name', 'HD Source'))
+
+        info_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=14, pady=12)
+        info_card.pack(fill='x')
+
+        fps_val = sc.get('fps', 0.0)
+        fps_str = '{:.3f}'.format(fps_val).rstrip('0').rstrip('.') + ' fps'
+        details = [
+            ("Source",     sc.get('display_name', 'HD Source')),
+            ("Resolution", str(sc.get('width', 0)) + '×' + str(sc.get('height', 0))),
+            ("Frame Rate", fps_str),
+            ("Codec",      sc.get('codec', 'unknown')),
+        ]
+        for lbl_text, val_text in details:
+            detail_row = tk.Frame(info_card, bg=Colors.BG_CARD)
+            detail_row.pack(fill='x', pady=2)
+            tk.Label(detail_row, text=lbl_text + ':',
+                     font=('Segoe UI', 11, 'bold'),
+                     fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                     width=14, anchor='w').pack(side='left')
+            tk.Label(detail_row, text=val_text,
+                     font=('Segoe UI', 11),
+                     fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD,
+                     anchor='w').pack(side='left')
+
+        # ════════════════════════════════════════════════════════════════════
+        # 2 — VIDEO STANDARD
+        # ════════════════════════════════════════════════════════════════════
+        fps_val = sc.get('fps', 0.0)
+        if abs(fps_val - 29.97) < 0.5 or abs(fps_val - 30.0) < 0.1:
+            auto_format = 'ntsc'
+        elif abs(fps_val - 25.0) < 0.5:
+            auto_format = 'pal'
+        else:
+            auto_format = self.config_data.get('auto_format')
+
+        fmt_badge = 'NTSC' if auto_format == 'ntsc' else ('PAL' if auto_format == 'pal' else None)
+        section_hdr_row("2", "Video Standard", fmt_badge)
+
+        initial_format = auto_format or self.config_data.get('format',
+                         self.config_data.get('guessed_format', 'ntsc'))
+        self.config_data['format'] = initial_format
+        self.format_var = tk.StringVar(value=initial_format)
+
+        fmt_card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+        fmt_card.pack(fill='x')
+        ModernRadioButton(fmt_card, "NTSC (29.97 fps)", self.format_var, "ntsc",
+                          "North America, Japan, South Korea").pack(fill='x')
+        ttk.Separator(fmt_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(fmt_card, "PAL (25 fps)", self.format_var, "pal",
+                          "Europe, Australia, most of Asia").pack(fill='x')
+        self.format_var.trace_add('write',
+            lambda *_: self.config_data.update({'format': self.format_var.get()}))
+
+        # ════════════════════════════════════════════════════════════════════
+        # 3 — FIELD ORDER
+        # ════════════════════════════════════════════════════════════════════
+        num_files = len(self.config_data.get('input_files', []))
+
+        fo_row = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        fo_row.pack(fill='x', pady=(20, 6))
+        tk.Label(fo_row, text="3. Field Order",
+                 font=('Segoe UI', 13, 'bold'),
+                 fg=Colors.ACCENT, bg=Colors.BG_MAIN).pack(side='left')
+
+        prior_fo = self.config_data.get('detected_field_order')
+        if prior_fo:
+            initial_badge = "  ✓ Auto-Detected: " + prior_fo.upper()
+            badge_color = '#22CC66'
+        else:
+            initial_badge = "  ⏳ Detecting…"
+            badge_color = Colors.ACCENT
+        self._fo_badge_lbl = tk.Label(fo_row, text=initial_badge,
+                                      font=('Segoe UI', 11, 'bold'),
+                                      fg=badge_color, bg=Colors.BG_MAIN)
+        self._fo_badge_lbl.pack(side='right')
+
+        # HD sources default to TFF — pre-select it
+        initial_fo = self.config_data.get('field_order',
+                     self.config_data.get('detected_field_order', 'tff'))
+        self.config_data['field_order'] = initial_fo
+        self.field_var = tk.StringVar(value=initial_fo)
+
+        fo_card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+        fo_card.pack(fill='x')
+        ModernRadioButton(fo_card, "TFF — Top Field First",
+                          self.field_var, "tff",
+                          "Standard for all AVCHD and HDV cameras").pack(fill='x')
+        ttk.Separator(fo_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(fo_card, "BFF — Bottom Field First",
+                          self.field_var, "bff",
+                          "Uncommon for HD — only select if you have confirmed otherwise").pack(fill='x')
+        ttk.Separator(fo_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(fo_card, "Progressive (no deinterlacing needed)",
+                          self.field_var, "progressive",
+                          "Video was already progressive — no deinterlacing applied").pack(fill='x')
+
+        self.field_var.trace_add('write',
+            lambda *_: self.config_data.update({'field_order': self.field_var.get()}))
+
+        # Note about HD field order universally being TFF
+        tk.Label(self.page_container,
+                 text="AVCHD and HDV sources are universally Top Field First (TFF). "
+                      "Only change this if you have confirmed otherwise.",
+                 font=('Segoe UI', 10), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+                 wraplength=620, justify='left').pack(anchor='w', pady=(6, 0))
+
+        if num_files <= 1:
+            rerun_row = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+            rerun_row.pack(anchor='w', pady=(8, 0))
+            ModernButton(rerun_row, "Re-run Detection",
+                         self._run_field_order_detection, width=150).pack(side='left')
+            # Wire badge label so _run_field_order_detection / _show_detection_result
+            # can update it exactly as they do for the SD page.
+            self.detect_badge_lbl = self._fo_badge_lbl
+            self.after(400, self._run_field_order_detection)
+
+        # ════════════════════════════════════════════════════════════════════
+        # 4 — TELECINE / INVERSE TELECINE DETECTION
+        # ════════════════════════════════════════════════════════════════════
+        ttk.Separator(self.page_container, orient='horizontal').pack(fill='x', pady=(20, 0))
+
+        ivtc_row = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        ivtc_row.pack(fill='x', pady=(12, 6))
+        tk.Label(ivtc_row, text="4. Telecine / Pulldown Detection",
+                 font=('Segoe UI', 13, 'bold'),
+                 fg=Colors.ACCENT, bg=Colors.BG_MAIN).pack(side='left')
+
+        prior_ivtc = self.config_data.get('ivtc_result')
+        if prior_ivtc:
+            if prior_ivtc.get('detected'):
+                _ivtc_badge_text = "  ⚠  Telecine detected (" + prior_ivtc['pattern'] + ")"
+                _ivtc_badge_color = Colors.WARNING
+            else:
+                _ivtc_badge_text = '  ✓ No telecine detected'
+                _ivtc_badge_color = Colors.SUCCESS
+        else:
+            _ivtc_badge_text = '  ⏳ Analyzing…'
+            _ivtc_badge_color = Colors.ACCENT
+
+        self._ivtc_badge = tk.Label(ivtc_row, text=_ivtc_badge_text,
+                                     font=('Segoe UI', 11, 'bold'),
+                                     fg=_ivtc_badge_color, bg=Colors.BG_MAIN)
+        self._ivtc_badge.pack(side='right')
+
+        tk.Label(
+            self.page_container,
+            text="Telecine (3:2 pulldown) is applied when film is transferred to interlaced video. "
+                 "If detected, VCG can apply Inverse Telecine (IVTC) to restore the original "
+                 "progressive frame rate instead of running standard deinterlacing.",
+            font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+            wraplength=620, justify='left').pack(anchor='w', pady=(0, 8))
+
+        # Container frames for detection result — populated by _show_ivtc_result
+        self._ivtc_result_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        self._ivtc_result_frame.pack(fill='x')
+
+        self._ivtc_mode_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        self._ivtc_mode_frame.pack(fill='x')
+
+        if prior_ivtc:
+            self.after(0, lambda: self._show_ivtc_result(prior_ivtc))
+
+        if num_files <= 1:
+            self.after(600, self._run_ivtc_detection)
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 3 — Y/C DELAY CORRECTION  (Feature 1)
