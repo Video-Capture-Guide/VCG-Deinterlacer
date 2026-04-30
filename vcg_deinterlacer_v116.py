@@ -3386,6 +3386,10 @@ class RestorationWizard(BaseWindow):
 
         # ── Step 2: Source Details → Crop ────────────────────────────────────
         if self.current_step == 2:
+            sc = self.config_data.get('source_classification', {}).get('source_class', 'sd')
+            if sc in ('avchd', 'hdv'):
+                self._ask_basic_or_advanced()
+                return
             self._show_step(3)
             return
 
@@ -4127,12 +4131,11 @@ class RestorationWizard(BaseWindow):
                  fg=Colors.ACCENT, bg=Colors.BG_MAIN).pack(side='left')
 
         prior_fo = self.config_data.get('detected_field_order')
-        if prior_fo:
+        if prior_fo and prior_fo not in ('unknown', ''):
             initial_badge = "  ✓ Auto-Detected: " + prior_fo.upper()
-            badge_color = '#22CC66'
         else:
-            initial_badge = "  ⏳ Detecting…"
-            badge_color = Colors.ACCENT
+            initial_badge = "  ✓ TFF (AVCHD/HDV standard)"
+        badge_color = '#22CC66'
         self._fo_badge_lbl = tk.Label(fo_row, text=initial_badge,
                                       font=('Segoe UI', 11, 'bold'),
                                       fg=badge_color, bg=Colors.BG_MAIN)
@@ -4176,7 +4179,6 @@ class RestorationWizard(BaseWindow):
             # Wire badge label so _run_field_order_detection / _show_detection_result
             # can update it exactly as they do for the SD page.
             self.detect_badge_lbl = self._fo_badge_lbl
-            self.after(400, self._run_field_order_detection)
 
         # ════════════════════════════════════════════════════════════════════
         # 4 — TELECINE / INVERSE TELECINE DETECTION
@@ -5690,6 +5692,22 @@ class RestorationWizard(BaseWindow):
         tk.Label(self.page_container, text="Upscale with NNEDI3",
                 font=('Segoe UI', 22, 'bold'),
                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+
+        sc = self.config_data.get('source_classification', {}).get('source_class', 'sd')
+        if sc in ('avchd', 'hdv'):
+            self.config_data['upscale_enabled'] = False
+            card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+            card.pack(fill='x', pady=(14, 0))
+            tk.Label(card,
+                     text="Not applicable for HD sources.",
+                     font=('Segoe UI', 13, 'bold'),
+                     fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w', padx=16, pady=(12, 4))
+            tk.Label(card,
+                     text="Your source is already 1080i HD — no upscaling is needed or applied.",
+                     font=('Segoe UI', 12),
+                     fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                     wraplength=560, justify='left').pack(anchor='w', padx=16, pady=(0, 12))
+            return
 
         tk.Label(self.page_container,
                 text=("Upscaling resizes your standard definition capture. Platforms like YouTube "
