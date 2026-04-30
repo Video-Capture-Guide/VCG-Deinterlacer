@@ -3,8 +3,8 @@
 # VCG DEINTERLACER
 # ============================================================
 #
-# Version:    1.0.16
-# Build Date: 2026-04-27
+# Version:    1.1.0
+# Build Date: 2026-04-30
 # Author:     VideoCaptureGuide
 # Website:    https://www.youtube.com/@VideoCaptureGuide
 #
@@ -55,8 +55,8 @@
 # ============================================================
 
 # Version constants
-VERSION = "1.0.16"
-BUILD_DATE = "2026-04-27"
+VERSION = "1.1.0"
+BUILD_DATE = "2026-04-30"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -5619,9 +5619,12 @@ class RestorationWizard(BaseWindow):
                 font=('Segoe UI', 12),
                 fg=color, bg=Colors.BG_CARD).pack(anchor='w', pady=(3, 0))
         
-        # Technical details (smaller)
+        # Noise index: TOUT (temporal outlier fraction) as a percentage —
+        # the most noise-specific metric since it ignores smooth motion.
         samples = data.get('samples_analyzed', 0)
-        tech_text = f"Analyzed {samples} samples  •  Avg diff: {data.get('avg_diff', 0):.1f}  •  Variance: {data.get('avg_variance', 0):.3f}"
+        tout_pct = data.get('avg_variance', 0) * 100
+        tech_text = (f"Noise index: {tout_pct:.1f}%  "
+                     f"(temporal outlier pixels, {samples} samples analyzed)")
         self._selectable_label(result_card, tech_text,
                 font=('Segoe UI', 12),
                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(anchor='w', pady=(2, 0))
@@ -5703,7 +5706,7 @@ class RestorationWizard(BaseWindow):
                      font=('Segoe UI', 13, 'bold'),
                      fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w', padx=16, pady=(12, 4))
             tk.Label(card,
-                     text="Your source is already 1080i HD — no upscaling is needed or applied.",
+                     text="Your source is already 1080i HD. This software is programmed to upscale to a maximum of 1920×1080.",
                      font=('Segoe UI', 12),
                      fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
                      wraplength=560, justify='left').pack(anchor='w', padx=16, pady=(0, 12))

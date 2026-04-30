@@ -6,6 +6,50 @@ root cause, and the fix that worked. Read this before making any changes.
 
 ---
 
+## Implemented in v1.1.0 (2026-04-30)
+
+**HD source routing — AVCHD / HDV wizard path**
+
+Added `classify_source(filepath)` (ffprobe-based) that returns `source_class`
+('sd'/'avchd'/'hdv'/'unknown'), dimensions, fps, codec, and `par_needed`.
+Called in `_on_files_changed`; result stored in `config_data['source_classification']`.
+
+Step 2 dispatches through `_page_source_dispatch` → `_page_source_details_hd`
+(AVCHD/HDV) or existing `_page_source_details` (SD).
+
+`_page_source_details_hd` has four sections: auto-detected source info card,
+NTSC/PAL, field order (TFF pre-selected), telecine detection.
+
+`generate_vpy_script` changes: HD sources skip crop and PAR correction;
+HDV (1440×1080) adds `core.resize.Spline36(clip,1920,1080)` after QTGMC.
+
+File browser and DnD handlers extended with `.mts .m2ts .m2t .ts`.
+
+**Three HD regression fixes (same session)**
+
+- *idet auto-trigger*: removed `self.after(400, self._run_field_order_detection)`
+  from the HD page; badge now shows "✓ TFF (AVCHD/HDV standard)" immediately.
+  idet misreads H.264 AVCHD as progressive due to frame-based encoding.
+- *Crop page shown for HD*: `_next_step` step-2 now calls
+  `_ask_basic_or_advanced()` directly for AVCHD/HDV, skipping the SD crop page.
+- *SD resolutions on upscale page*: `_page_upscale` returns early for HD with
+  a "Not applicable" card; SD resolution list is never rendered.
+
+**Noise index metric on Noise Analysis page**
+
+Replaced the raw `Avg diff / Variance` technical line with a human-readable
+"Noise index: X.X%" derived from TOUT (temporal outlier fraction × 100).
+TOUT is the most noise-specific metric because it counts pixels that flicker
+independently of smooth scene motion. Thresholds: <2% clean, 2–6% light,
+6–12% moderate, >12% heavy.
+
+**Upscale page HD text**
+
+Changed the 1080i HD card text to: "Your source is already 1080i HD. This
+software is programmed to upscale to a maximum of 1920×1080."
+
+---
+
 ## Pending Changes for Next Release
 
 These are confirmed, scoped changes to implement in the next version bump:
@@ -86,7 +130,7 @@ and use it for output size display, SAR calculation, and crop validation.
 
 | File | Purpose |
 |------|---------|
-| `vcg_deinterlacer_v116.py` | Main application — all logic lives here (see naming convention below) |
+| `vcg_deinterlacer_v117.py` | Main application — all logic lives here (see naming convention below) |
 | `build_vcg_deinterlacer.bat` | Nuitka compile script |
 | `clean_build.bat` | Wipes Nuitka artifacts before a fresh compile |
 | `BUILD_INSTRUCTIONS.md` | Step-by-step build and release guide |
@@ -423,7 +467,7 @@ one of them causes subtle bugs.
 **Also update the Advanced button text** in `_ask_basic_or_advanced()` to
 mention the new step so users know it's available.
 
-**Current step layout (v1.0.4, 11 steps, indices 0–10):**
+**Current step layout (v1.1.0, 11 steps, indices 0–10):**
 ```
 0  Welcome
 1  Select File
@@ -632,7 +676,7 @@ Before compiling a new release:
 6. Run `clean_build.bat` to wipe ALL Nuitka artifacts
 7. Run `build_vcg_deinterlacer.bat`
 8. Test the EXE on a machine WITHOUT the source Python installed
-   (use the compiled EXE, not `python vcg_deinterlacer_v116.py`)
+   (use the compiled EXE, not `python vcg_deinterlacer_v117.py`)
 9. Test on Python 3.13+ if possible (to verify the pip fallback works)
 10. Create GitHub Release, attach the ZIP
 11. Upload ZIP contains: EXE + logo.png + README.txt + LICENSE.txt
