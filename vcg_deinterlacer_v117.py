@@ -1452,17 +1452,16 @@ def generate_histogram_image(filepath, timestamp=None):
     histogram_path = os.path.join(temp_dir, f'levels_analysis_{os.getpid()}.png')
     
     try:
-        # Simpler filter - just waveform, no side-by-side
         cmd = [
-            FFMPEG_PATH, '-ss', str(timestamp), '-i', filepath, '-vframes', '1',
+            FFMPEG_PATH, '-fflags', '+discardcorrupt',
+            '-ss', str(timestamp), '-i', filepath, '-vframes', '1',
             '-vf', 'waveform=mode=column:intensity=0.4:graticule=green:flags=numbers+dots,scale=550:-1',
-            '-y', histogram_path
+            '-update', '1', '-y', histogram_path
         ]
         result = run_hidden(cmd, timeout=60)
         if result.returncode == 0 and os.path.exists(histogram_path):
             return histogram_path
-        # Log error for debugging
-        print(f"Waveform generation failed: {result.stderr}")
+        print(f"Waveform generation failed: {result.stderr[:300]}")
     except Exception as e:
         print(f"Waveform exception: {e}")
     return None
@@ -1482,16 +1481,16 @@ def generate_vectorscope_image(filepath, timestamp=None):
     vectorscope_path = os.path.join(temp_dir, f'color_analysis_{os.getpid()}.png')
     
     try:
-        # Simpler filter - just vectorscope, no side-by-side
         cmd = [
-            FFMPEG_PATH, '-ss', str(timestamp), '-i', filepath, '-vframes', '1',
+            FFMPEG_PATH, '-fflags', '+discardcorrupt',
+            '-ss', str(timestamp), '-i', filepath, '-vframes', '1',
             '-vf', 'vectorscope=mode=color4:graticule=green:opacity=0.5:envelope=instant,scale=400:-1',
-            '-y', vectorscope_path
+            '-update', '1', '-y', vectorscope_path
         ]
         result = run_hidden(cmd, timeout=60)
         if result.returncode == 0 and os.path.exists(vectorscope_path):
             return vectorscope_path
-        print(f"Vectorscope generation failed: {result.stderr}")
+        print(f"Vectorscope generation failed: {result.stderr[:300]}")
     except Exception as e:
         print(f"Vectorscope exception: {e}")
     return None
@@ -1511,18 +1510,17 @@ def generate_rgb_histogram(filepath, timestamp=None):
     hist_path = os.path.join(temp_dir, f'rgb_histogram_{os.getpid()}.png')
 
     try:
-        # histogram filter: stack mode shows R/G/B/luma channels as separate bars
-        # logarithmic scale makes detail visible in shadows and highlights
         cmd = [
-            FFMPEG_PATH, '-ss', str(timestamp), '-i', filepath, '-vframes', '1',
+            FFMPEG_PATH, '-fflags', '+discardcorrupt',
+            '-ss', str(timestamp), '-i', filepath, '-vframes', '1',
             '-vf', ('histogram=display_mode=stack:levels_mode=logarithmic'
                     ':fgopacity=0.9:bgopacity=0.1,scale=520:-1'),
-            '-y', hist_path
+            '-update', '1', '-y', hist_path
         ]
         result = run_hidden(cmd, timeout=60)
         if result.returncode == 0 and os.path.exists(hist_path):
             return hist_path
-        print(f"RGB histogram generation failed: {result.stderr[:200]}")
+        print(f"RGB histogram generation failed: {result.stderr[:300]}")
     except Exception as e:
         print(f"RGB histogram exception: {e}")
     return None
