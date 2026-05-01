@@ -226,7 +226,7 @@ echo       ships with it by default).
 echo.
 echo Next steps:
 echo   1. Test the EXE:  dist\VCG_Deinterlacer_1.1.0.exe
-echo   2. Package as ZIP (1.0.4 portable -- no installer needed):
+echo   2. Package as ZIP (1.1.0 portable -- no installer needed):
 echo      - Create a folder:  VCG_Deinterlacer_1.1.0\
 echo      - Copy into it:     dist\VCG_Deinterlacer_1.1.0.exe
 echo      -                   logo.png
