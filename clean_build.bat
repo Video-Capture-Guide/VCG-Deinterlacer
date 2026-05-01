@@ -33,6 +33,8 @@ rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.12.0" 2>nul
 rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.13.0" 2>nul
 rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.14.0" 2>nul
 rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.15.0" 2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.16.0" 2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.1.0.0"  2>nul
 
 echo.
 echo ============================================================
