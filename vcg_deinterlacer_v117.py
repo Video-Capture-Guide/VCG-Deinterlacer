@@ -1437,16 +1437,17 @@ def analyze_color_bleeding(filepath, sample_frames=10, progress_callback=None):
         'analyzed': True
     }
 
-def generate_histogram_image(filepath):
-    """Generate waveform/histogram image."""
+def generate_histogram_image(filepath, timestamp=None):
+    """Generate waveform monitor image."""
     try:
         cmd = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', filepath]
         result = run_hidden(cmd, timeout=30)
         duration = float(result.stdout.strip())
     except:
         duration = 30
-    
-    timestamp = duration / 2
+
+    if timestamp is None:
+        timestamp = duration / 2
     temp_dir = os.environ.get('TEMP', os.path.dirname(filepath))
     histogram_path = os.path.join(temp_dir, f'levels_analysis_{os.getpid()}.png')
     
@@ -1466,7 +1467,7 @@ def generate_histogram_image(filepath):
         print(f"Waveform exception: {e}")
     return None
 
-def generate_vectorscope_image(filepath):
+def generate_vectorscope_image(filepath, timestamp=None):
     """Generate vectorscope image."""
     try:
         cmd = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', filepath]
@@ -1474,8 +1475,9 @@ def generate_vectorscope_image(filepath):
         duration = float(result.stdout.strip())
     except:
         duration = 30
-    
-    timestamp = duration / 2
+
+    if timestamp is None:
+        timestamp = duration / 2
     temp_dir = os.environ.get('TEMP', os.path.dirname(filepath))
     vectorscope_path = os.path.join(temp_dir, f'color_analysis_{os.getpid()}.png')
     
@@ -1492,6 +1494,37 @@ def generate_vectorscope_image(filepath):
         print(f"Vectorscope generation failed: {result.stderr}")
     except Exception as e:
         print(f"Vectorscope exception: {e}")
+    return None
+
+def generate_rgb_histogram(filepath, timestamp=None):
+    """Generate RGB channel histogram image (like VirtualDub's histogram tool)."""
+    try:
+        cmd = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', filepath]
+        result = run_hidden(cmd, timeout=30)
+        duration = float(result.stdout.strip())
+    except:
+        duration = 30
+
+    if timestamp is None:
+        timestamp = duration / 2
+    temp_dir = os.environ.get('TEMP', os.path.dirname(filepath))
+    hist_path = os.path.join(temp_dir, f'rgb_histogram_{os.getpid()}.png')
+
+    try:
+        # histogram filter: stack mode shows R/G/B/luma channels as separate bars
+        # logarithmic scale makes detail visible in shadows and highlights
+        cmd = [
+            FFMPEG_PATH, '-ss', str(timestamp), '-i', filepath, '-vframes', '1',
+            '-vf', ('histogram=display_mode=stack:levels_mode=logarithmic'
+                    ':fgopacity=0.9:bgopacity=0.1,scale=520:-1'),
+            '-y', hist_path
+        ]
+        result = run_hidden(cmd, timeout=60)
+        if result.returncode == 0 and os.path.exists(hist_path):
+            return hist_path
+        print(f"RGB histogram generation failed: {result.stderr[:200]}")
+    except Exception as e:
+        print(f"RGB histogram exception: {e}")
     return None
 
 # ============================================================
@@ -6081,29 +6114,47 @@ class RestorationWizard(BaseWindow):
         if 'input_path' not in self.config_data:
             self.after(0, self._finish_levels_analysis_error, "❌ No file selected")
             return
-        
-        # Update status
-        self.after(0, lambda: self.levels_status_label.config(text="Generating waveform..."))
-        
-        # Generate waveform image
+
+        filepath = self.config_data['input_path']
+
+        # Determine video duration for scope scrubbing
+        try:
+            dur_result = run_hidden([FFPROBE_PATH, '-v', 'error', '-show_entries',
+                                     'format=duration', '-of', 'csv=p=0', filepath], timeout=30)
+            scope_duration = float(dur_result.stdout.strip())
+        except Exception:
+            scope_duration = 60.0
+        scope_ts = scope_duration * 0.5
+
+        # Generate waveform monitor image
+        self.after(0, lambda: self.levels_status_label.config(text="Generating waveform monitor..."))
         waveform_path = None
         try:
-            waveform_path = generate_histogram_image(self.config_data['input_path'])
+            waveform_path = generate_histogram_image(filepath, timestamp=scope_ts)
             if waveform_path:
                 self.temp_images.append(waveform_path)
-        except Exception as e:
+        except Exception:
             pass
-        
-        # Update status
+
+        # Generate RGB histogram image
+        self.after(0, lambda: self.levels_status_label.config(text="Generating RGB histogram..."))
+        histogram_path = None
+        try:
+            histogram_path = generate_rgb_histogram(filepath, timestamp=scope_ts)
+            if histogram_path:
+                self.temp_images.append(histogram_path)
+        except Exception:
+            pass
+
+        # Analyze luma levels
         self.after(0, lambda: self.levels_status_label.config(text="Analyzing luma levels..."))
         self.after(0, lambda: self.levels_progress_label.config(text="Measuring min/max brightness"))
-        
-        # Analyze levels
-        levels_data = analyze_video_levels(self.config_data['input_path'])
-        
+        levels_data = analyze_video_levels(filepath)
+
         if levels_data and levels_data['min_y'] is not None:
             self.config_data['levels_data'] = levels_data
-            self.after(0, lambda: self._show_levels_results(levels_data, waveform_path))
+            self.after(0, lambda: self._show_levels_results(
+                levels_data, waveform_path, histogram_path, scope_duration))
         else:
             self.after(0, self._finish_levels_analysis_error, "Could not analyze levels")
     
@@ -6139,19 +6190,117 @@ class RestorationWizard(BaseWindow):
         self.config_data['levels_adjustment'] = 'none'
         self.levels_var.trace_add('write', lambda *_: self.config_data.update({'levels_adjustment': self.levels_var.get()}))
     
-    def _show_levels_results(self, data, waveform_path=None):
+    def _show_levels_results(self, data, waveform_path=None, histogram_path=None,
+                              scope_duration=60.0):
         # Mark analysis complete; unlock Next only when all analyses are done
         self.levels_analysis_complete = True
         self._on_analysis_section_done()
-        
+
         # Hide progress card
         if hasattr(self, 'levels_progress_card'):
             self.levels_progress_card.pack_forget()
-        
-        # Show waveform if available
-        if waveform_path:
-            self.levels_preview.pack(fill='x', before=self.levels_results_frame)
-            self.levels_preview.load_image(waveform_path)
+
+        # ── Scope display: tab bar + image + frame scrubber ──────────────────
+        self._scope_waveform_path  = waveform_path
+        self._scope_histogram_path = histogram_path
+        self._scope_duration       = scope_duration
+        self._scope_filepath       = self.config_data.get('input_path', '')
+        self._scope_active         = tk.StringVar(value='waveform')
+
+        scope_outer = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        scope_outer.pack(fill='x', pady=(10, 0), before=self.levels_results_frame)
+
+        # Tab bar
+        tab_bar = tk.Frame(scope_outer, bg=Colors.BG_MAIN)
+        tab_bar.pack(fill='x', pady=(0, 4))
+        tk.Label(tab_bar, text="Video Scopes",
+                 font=('Segoe UI', 11, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(side='left')
+
+        def _make_tab(text, value):
+            lbl = tk.Label(tab_bar, text=text,
+                           font=('Segoe UI', 10, 'bold'), cursor='hand2',
+                           padx=10, pady=4, relief='flat',
+                           fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD)
+            lbl.pack(side='right', padx=(4, 0))
+            def _activate(lbl=lbl, value=value):
+                self._scope_active.set(value)
+                _refresh_tab_style()
+                _show_scope_image()
+            lbl.bind('<Button-1>', lambda _e, a=_activate: a())
+            return lbl
+
+        self._tab_hist = _make_tab("RGB Histogram", 'histogram')
+        self._tab_wave = _make_tab("Waveform Monitor", 'waveform')
+
+        def _refresh_tab_style():
+            active = self._scope_active.get()
+            for lbl, val in ((self._tab_wave, 'waveform'), (self._tab_hist, 'histogram')):
+                if val == active:
+                    lbl.configure(fg=Colors.ACCENT, bg=Colors.BG_MAIN,
+                                  relief='solid', bd=1)
+                else:
+                    lbl.configure(fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                                  relief='flat', bd=0)
+
+        _refresh_tab_style()
+
+        # Scope image display
+        self._scope_preview = ImagePreview(scope_outer)
+        self._scope_preview.pack(fill='x')
+
+        def _show_scope_image():
+            path = (self._scope_waveform_path if self._scope_active.get() == 'waveform'
+                    else self._scope_histogram_path)
+            if path:
+                self._scope_preview.load_image(path, max_width=580, max_height=300)
+            else:
+                self._scope_preview.image_label.config(
+                    text="⚠ Scope image not available", fg=Colors.WARNING,
+                    font=('Segoe UI', 11))
+
+        _show_scope_image()
+
+        # Frame scrubber
+        scrub_frame = tk.Frame(scope_outer, bg=Colors.BG_MAIN)
+        scrub_frame.pack(fill='x', pady=(6, 0))
+        tk.Label(scrub_frame, text="Frame:",
+                 font=('Segoe UI', 10), fg=Colors.TEXT_SECONDARY,
+                 bg=Colors.BG_MAIN).pack(side='left')
+        self._scope_slider = tk.Scale(scrub_frame, from_=0, to=100,
+                                      orient='horizontal', showvalue=False,
+                                      bg=Colors.BG_MAIN, fg=Colors.TEXT_PRIMARY,
+                                      troughcolor=Colors.BG_CARD,
+                                      highlightthickness=0, bd=0,
+                                      length=340)
+        self._scope_slider.set(50)
+        self._scope_slider.pack(side='left', padx=(6, 8))
+        self._scope_pct_label = tk.Label(scrub_frame, text="50%",
+                                          font=('Segoe UI', 10),
+                                          fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+                                          width=4)
+        self._scope_pct_label.pack(side='left')
+        self._scope_slider.configure(command=lambda v: self._scope_pct_label.config(text=f"{int(float(v))}%"))
+
+        from functools import partial as _partial
+        _refresh_btn = tk.Button(scrub_frame, text="Refresh",
+                                  font=('Segoe UI', 9, 'bold'),
+                                  fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD,
+                                  activebackground=Colors.ACCENT,
+                                  relief='flat', cursor='hand2', padx=8, pady=3,
+                                  command=self._refresh_scope_display)
+        _refresh_btn.pack(side='left', padx=(4, 0))
+
+        # Keep _show_scope_image accessible for _refresh_scope_display
+        self._show_scope_image = _show_scope_image
+
+        # existing waveform was shown via self.levels_preview — hide it now
+        # (we're using self._scope_preview instead)
+        if hasattr(self, 'levels_preview'):
+            try:
+                self.levels_preview.pack_forget()
+            except Exception:
+                pass
         
         # Show numeric results
         result_card = tk.Frame(self.levels_results_frame, bg=Colors.BG_CARD, padx=15, pady=10)
@@ -6219,6 +6368,37 @@ class RestorationWizard(BaseWindow):
                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
                 justify='left', wraplength=550).pack(anchor='w', pady=(5, 0))
     
+    def _refresh_scope_display(self):
+        """Re-generate scope images at the timestamp selected by the scrubber."""
+        pct = self._scope_slider.get()
+        ts  = self._scope_duration * (pct / 100.0)
+        fp  = self._scope_filepath
+
+        # Disable the button text while loading
+        if hasattr(self, '_scope_preview'):
+            self._scope_preview.image_label.config(
+                text="⏳ Refreshing…", image='', fg=Colors.ACCENT,
+                font=('Segoe UI', 11))
+
+        def _worker():
+            wave = generate_histogram_image(fp, timestamp=ts)
+            hist = generate_rgb_histogram(fp, timestamp=ts)
+            if wave:
+                self.temp_images.append(wave)
+            if hist:
+                self.temp_images.append(hist)
+            self.after(0, lambda: self._apply_refreshed_scopes(wave, hist))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_refreshed_scopes(self, waveform_path, histogram_path):
+        if waveform_path:
+            self._scope_waveform_path = waveform_path
+        if histogram_path:
+            self._scope_histogram_path = histogram_path
+        if hasattr(self, '_show_scope_image'):
+            self._show_scope_image()
+
     def _page_audio(self):
         tk.Label(self.page_container, text="Audio Options",
                 font=('Segoe UI', 22, 'bold'),
