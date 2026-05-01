@@ -1220,10 +1220,13 @@ def analyze_noise_level(filepath, sample_frames=15, progress_callback=None):
         timestamp = duration * offset
         
         try:
-            # Analyze 1 second of video at this point for temporal noise
+            # Analyze 1 second of video at this point for temporal noise.
+            # -fflags +discardcorrupt prevents H.264 seek decode errors from
+            # aborting the run before signalstats can measure any frames.
             cmd = [
-                FFMPEG_PATH, '-ss', str(timestamp), '-i', filepath, 
-                '-t', '1',  # 1 second segment
+                FFMPEG_PATH, '-fflags', '+discardcorrupt',
+                '-ss', str(timestamp), '-i', filepath,
+                '-t', '1',
                 '-vf', 'signalstats=stat=tout+vrep+brng,metadata=mode=print',
                 '-f', 'null', '-'
             ]
@@ -1305,7 +1308,7 @@ def analyze_noise_level(filepath, sample_frames=15, progress_callback=None):
         'std_diff': std_diff,
         'avg_variance': avg_variance,
         'samples_analyzed': len(diff_values),
-        'analyzed': True
+        'analyzed': len(diff_values) >= 3,  # require at least 3 good samples
     }
 
 def analyze_color_bleeding(filepath, sample_frames=10, progress_callback=None):
@@ -5654,8 +5657,11 @@ class RestorationWizard(BaseWindow):
         # the most noise-specific metric since it ignores smooth motion.
         samples = data.get('samples_analyzed', 0)
         tout_pct = data.get('avg_variance', 0) * 100
-        tech_text = (f"Noise index: {tout_pct:.1f}%  "
-                     f"(temporal outlier pixels, {samples} samples analyzed)")
+        if samples == 0:
+            tech_text = "Noise index: unavailable (no frames sampled — try a different format)"
+        else:
+            tech_text = (f"Noise index: {tout_pct:.1f}%  "
+                         f"(temporal outlier pixels, {samples} samples analyzed)")
         self._selectable_label(result_card, tech_text,
                 font=('Segoe UI', 12),
                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(anchor='w', pady=(2, 0))
