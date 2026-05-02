@@ -17,17 +17,19 @@ Double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically down
 
 - **QTGMC deinterlacing** — the gold standard for analog video restoration
 - **Automatic first-run setup** — downloads FFmpeg and VapourSynth automatically on first launch
-- **Automatic video analysis** — detects noise level, color cast, color bleeding, and levels
+- **Automatic video analysis** — detects noise level (with noise index %), color cast, color bleeding, and brightness levels
 - **Guided wizard** — walks you through every setting with explanations
+- **AVCHD and HDV support** — automatically detects and processes interlaced HD camcorder footage (.mts, .m2ts, .m2t, .ts) with a dedicated HD wizard path
 - **Batch processing** — queue multiple files and process them overnight
 - **Multiple output formats** — ProRes HQ, H.264, FFV1 (lossless), and more
-- **PAR correction** — automatically converts non-square pixels to square for NTSC and PAL
+- **PAR correction** — automatically converts non-square pixels to square for NTSC, PAL, and HDV sources
 - **Temporal denoising** — optional SMDegrain for noisy VHS footage
-- **Upscaling** — optional upscale to presets with NNEDI3
+- **Upscaling** — optional upscale to presets with NNEDI3 (SD sources only)
 - **Mono-to-stereo** — optional fix if your video has audio in only one channel
 - **Color correction** — auto-detects and corrects color casts and saturation issues
+- **Video scopes** — Vectorscope and RGB Histogram on the Color Analysis page; Waveform Monitor with frame scrubber on the Video Levels page
 - **Comparison video** — generates a side-by-side original vs. enhanced clip
-- **Drag and drop** — drop video files directly onto the app window
+- **Drag and drop** — drop video files directly onto the app window, including MTS and AVCHD files
 - **Portable** — no installer, no UAC prompt, no admin rights required
 
 ---
