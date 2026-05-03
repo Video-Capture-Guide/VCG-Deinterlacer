@@ -89,7 +89,21 @@ while True:
     counter += 1
 ```
 
-**3. Add Blackmagic Intensity D1 NTSC capture method + fix 720×486 height detection**
+**3. Fix stale deps download size label in First Run Setup**
+
+Line 8070 in the First Run Setup window shows `~60 MB` but the actual
+vcg-deps-v10.zip is ~136 MB. Update the label text to match:
+
+```python
+# Before:
+tk.Label(self, text="Downloading tools — this only happens once (~60 MB).", ...)
+# After:
+tk.Label(self, text="Downloading tools — this only happens once (~136 MB).", ...)
+```
+
+Also audit any other in-app or README references (README already correct at ~136 MB).
+
+**4. Add Blackmagic Intensity D1 NTSC capture method + fix 720×486 height detection**
 
 Blackmagic Intensity captures at 720×486 (D1 full-raster NTSC) and stores files
 with incorrect square-pixel (PAR=1.000) metadata. The current capture method
