@@ -6,6 +6,38 @@ root cause, and the fix that worked. Read this before making any changes.
 
 ---
 
+## Implemented in v1.2.0 (2026-05-08)
+
+**Fix: 1440×1080 AVCHD (anamorphic) output squished to 4:3**
+
+Some Sony and Panasonic AVCHD camcorders record at 1440×1080 with non-square
+pixels (4:3 PAR), identical to HDV geometry but in an H.264 container. The
+`classify_source()` function was checking `codec == 'h264' and height == 1080`
+and unconditionally setting `par_needed = False`, so the 1440→1920 scale was
+never applied. VLC played these files correctly (it reads the SAR metadata);
+the exported output was 1440 wide and appeared squished 4:3.
+
+Fix in `classify_source()`:
+```python
+if width == 1440:
+    result['display_name'] = 'AVCHD / MTS (1440×1080i anamorphic)'
+    result['par_needed'] = True
+else:
+    result['display_name'] = 'AVCHD / MTS (1920×1080i)'
+    result['par_needed'] = False
+```
+
+Fix in `generate_vpy_script()`: the PAR correction block previously checked
+`source_class == 'hdv'`; changed to check `_is_hd` (True for both avchd and
+hdv) combined with `par_needed`. The Spline36 scale to 1920×1080 now fires
+for any HD source that has `par_needed = True`, regardless of codec.
+
+**Fix: First Run Setup download size label showed ~60 MB (actual ~136 MB)**
+
+Updated line in `_build_ui()` of `FirstRunSetupWindow`.
+
+---
+
 ## Implemented in v1.1.0 (2026-04-30)
 
 **HD source routing — AVCHD / HDV wizard path**
@@ -89,21 +121,7 @@ while True:
     counter += 1
 ```
 
-**3. Fix stale deps download size label in First Run Setup**
-
-Line 8070 in the First Run Setup window shows `~60 MB` but the actual
-vcg-deps-v10.zip is ~136 MB. Update the label text to match:
-
-```python
-# Before:
-tk.Label(self, text="Downloading tools — this only happens once (~60 MB).", ...)
-# After:
-tk.Label(self, text="Downloading tools — this only happens once (~136 MB).", ...)
-```
-
-Also audit any other in-app or README references (README already correct at ~136 MB).
-
-**4. Add Blackmagic Intensity D1 NTSC capture method + fix 720×486 height detection**
+**3. Add Blackmagic Intensity D1 NTSC capture method + fix 720×486 height detection**
 
 Blackmagic Intensity captures at 720×486 (D1 full-raster NTSC) and stores files
 with incorrect square-pixel (PAR=1.000) metadata. The current capture method
@@ -144,7 +162,7 @@ and use it for output size display, SAR calculation, and crop validation.
 
 | File | Purpose |
 |------|---------|
-| `vcg_deinterlacer_v117.py` | Main application — all logic lives here (see naming convention below) |
+| `vcg_deinterlacer_v118.py` | Main application — all logic lives here (see naming convention below) |
 | `build_vcg_deinterlacer.bat` | Nuitka compile script |
 | `clean_build.bat` | Wipes Nuitka artifacts before a fresh compile |
 | `BUILD_INSTRUCTIONS.md` | Step-by-step build and release guide |
@@ -690,7 +708,7 @@ Before compiling a new release:
 6. Run `clean_build.bat` to wipe ALL Nuitka artifacts
 7. Run `build_vcg_deinterlacer.bat`
 8. Test the EXE on a machine WITHOUT the source Python installed
-   (use the compiled EXE, not `python vcg_deinterlacer_v117.py`)
+   (use the compiled EXE, not `python vcg_deinterlacer_v118.py`)
 9. Test on Python 3.13+ if possible (to verify the pip fallback works)
 10. Create GitHub Release, attach the ZIP
 11. Upload ZIP contains: EXE + logo.png + README.txt + LICENSE.txt

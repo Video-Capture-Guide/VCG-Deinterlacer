@@ -195,6 +195,8 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
+| v1.2.0  | 2026-05-08 | Fix: 1440×1080 AVCHD (Sony/Panasonic anamorphic) output squished to 4:3 — app now detects non-square-pixel AVCHD and applies PAR correction to 1920×1080 |
+| v1.1.0  | 2026-04-30 | AVCHD/HDV HD support — automatic detection of interlaced HD camcorder footage with dedicated HD wizard path; video scopes (Vectorscope + RGB Histogram on Color page, Waveform Monitor on Levels page); noise index % metric on Noise Analysis page |
 | v1.0.16 | 2026-04-27 | Fix: "No space left on device" on large captures — vspipe output is now piped directly into FFmpeg (no intermediate temp y4m file); a 31-minute 1440×1080 capture previously required ~275 GB of free disk space and now requires none |
 | v1.0.15 | 2026-04-25 | Fix: batch processing failed partway through large batches — temp files now written to system temp folder with unique names instead of source folder with PID-based names; one crashed file no longer blocks remaining files |
 | v1.0.14 | 2026-04-25 | Fix: bundled python ctypes test on machines with no system Python — clean PATH for smoke test subprocess; libffi-8.dll now included in deps v10; bundled python used as last resort instead of Nuitka proxy |
