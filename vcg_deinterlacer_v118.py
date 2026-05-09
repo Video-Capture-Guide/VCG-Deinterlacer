@@ -1697,16 +1697,41 @@ def generate_vpy_script(config):
     # Load source - pass fpsnum/fpsden directly to decoder (like Hybrid does)
     # This forces exact frame rate at the decoder level for proper sync
     filepath = config['input_path'].replace('\\', '\\\\')
-    lines.append('# Load source video with forced frame rate (fixes sync issues)')
-    lines.append('try:')
-    lines.append(f'    clip = core.lsmas.LWLibavSource(r"{filepath}", stream_index=0, cache=0, fpsnum={fpsnum}, fpsden={fpsden})')
-    lines.append('except:')
+    # For AVCHD/HDV sources use ffms2 as primary loader.
+    # lsmas relies on container metadata for num_frames; AVCHD files moved out of
+    # their BDMV directory structure have corrupt duration metadata (e.g. 26 hours)
+    # causing lsmas to think there are millions of frames.  It processes the real
+    # frames fine then fails trying to read beyond the file.  ffms2 scans the file
+    # physically so it always reports the correct actual frame count.
+    use_ffms2_first = _is_hd
+    lines.append('# Load source — tries multiple loaders in order, testing frame 0 each time')
+    lines.append('# to catch lazy failures (e.g. lsmas succeeds on open but fails mid-output).')
+    lines.append('# AVCHD/HDV files moved out of their BDMV directory have corrupt duration')
+    lines.append('# metadata; ffms2 scans the file physically and always gets the right frame count.')
+    lines.append('def _try_src(fn):')
     lines.append('    try:')
-    lines.append(f'        clip = core.ffms2.Source(r"{filepath}")')
-    lines.append(f'        clip = core.std.AssumeFPS(clip, fpsnum={fpsnum}, fpsden={fpsden})')
-    lines.append('    except:')
-    lines.append(f'        clip = core.bs.VideoSource(r"{filepath}")')
-    lines.append(f'        clip = core.std.AssumeFPS(clip, fpsnum={fpsnum}, fpsden={fpsden})')
+    lines.append('        c = fn()')
+    lines.append('        c.get_frame(0)')
+    lines.append('        return c')
+    lines.append('    except Exception:')
+    lines.append('        return None')
+    lines.append('')
+    if use_ffms2_first:
+        # AVCHD/HDV: ffms2 first (immune to corrupt container duration metadata)
+        lines.append(f'clip = (')
+        lines.append(f'    _try_src(lambda: core.std.AssumeFPS(core.ffms2.Source(r"{filepath}"), fpsnum={fpsnum}, fpsden={fpsden}))')
+        lines.append(f'    or _try_src(lambda: core.lsmas.LWLibavSource(r"{filepath}", stream_index=0, cache=0, fpsnum={fpsnum}, fpsden={fpsden}))')
+        lines.append(f'    or _try_src(lambda: core.std.AssumeFPS(core.bs.VideoSource(r"{filepath}"), fpsnum={fpsnum}, fpsden={fpsden}))')
+        lines.append(f')')
+    else:
+        # SD: lsmas first (better performance for normal files)
+        lines.append(f'clip = (')
+        lines.append(f'    _try_src(lambda: core.lsmas.LWLibavSource(r"{filepath}", stream_index=0, cache=0, fpsnum={fpsnum}, fpsden={fpsden}))')
+        lines.append(f'    or _try_src(lambda: core.std.AssumeFPS(core.ffms2.Source(r"{filepath}"), fpsnum={fpsnum}, fpsden={fpsden}))')
+        lines.append(f'    or _try_src(lambda: core.std.AssumeFPS(core.bs.VideoSource(r"{filepath}"), fpsnum={fpsnum}, fpsden={fpsden}))')
+        lines.append(f')')
+    lines.append('if clip is None:')
+    lines.append(f'    raise RuntimeError("All source loaders failed for: {filepath}")')
     lines.append('')
     
     # Convert to YUV422 if needed (QTGMC requires YUV; RGB needs matrix specified)
