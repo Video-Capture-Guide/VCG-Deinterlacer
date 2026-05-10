@@ -1703,7 +1703,8 @@ def generate_vpy_script(config):
     # causing lsmas to think there are millions of frames.  It processes the real
     # frames fine then fails trying to read beyond the file.  ffms2 scans the file
     # physically so it always reports the correct actual frame count.
-    use_ffms2_first = _is_hd
+    _source_class_early = config.get('source_classification', {}).get('source_class', 'sd')
+    use_ffms2_first = _source_class_early in ('avchd', 'hdv')
     lines.append('# Load source — tries multiple loaders in order, testing frame 0 each time')
     lines.append('# to catch lazy failures (e.g. lsmas succeeds on open but fails mid-output).')
     lines.append('# AVCHD/HDV files moved out of their BDMV directory have corrupt duration')
