@@ -626,7 +626,7 @@ echo       https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases
 echo       Tag: v8
 echo       Asset filename: vcg-deps-v10.zip
 echo.
-echo  2. DEPS_VERSION = '10' is already set in vcg_deinterlacer_v114.py
+echo  2. DEPS_VERSION = '10' is already set in vcg_deinterlacer_v120.py  (app v1.4.0)
 echo       .../releases/download/v10/vcg-deps-v10.zip
 echo.
 echo  3. Rebuild the app EXE with build_vcg_deinterlacer.bat
