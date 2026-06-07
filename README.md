@@ -1,5 +1,5 @@
 # VCG Deinterlacer
-by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
+### Beta-02 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
 
@@ -7,9 +7,9 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 
 ## Download
 
-**[Download VCG_Deinterlacer](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
+**[Download VCG_Deinterlacer.exe — Beta-02](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
 
-Double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
+Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
 
 ---
 
@@ -72,7 +72,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ## Installation
 
-1. Download `VCG_Deinterlacer_1.0.16.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+1. Download `VCG_Deinterlacer_Beta-02.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
@@ -195,20 +195,7 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
-| v1.0.16 | 2026-04-27 | Fix: "No space left on device" on large captures — vspipe output is now piped directly into FFmpeg (no intermediate temp y4m file); a 31-minute 1440×1080 capture previously required ~275 GB of free disk space and now requires none |
-| v1.0.15 | 2026-04-25 | Fix: batch processing failed partway through large batches — temp files now written to system temp folder with unique names instead of source folder with PID-based names; one crashed file no longer blocks remaining files |
-| v1.0.14 | 2026-04-25 | Fix: bundled python ctypes test on machines with no system Python — clean PATH for smoke test subprocess; libffi-8.dll now included in deps v10; bundled python used as last resort instead of Nuitka proxy |
-| v1.0.13 | 2026-04-24 | Fix: bundled python.exe ctypes smoke-test — if bundled python fails _ctypes DLL load, app automatically falls back to system Python |
-| v1.0.12 | 2026-04-24 | Fix: bundle python.exe in deps v9 — app no longer requires system Python to be installed (self-contained runtime) |
-| v1.0.11 | 2026-04-24 | Fix: Nuitka extraction python.exe selected for retry 3A on some machines — now strips extraction dir from PATH before search (three-layer guard) |
-| v1.0.10 | 2026-04-23 | Fix: 8.3 short-path (VCG_DE~1) caused [WinError 2] when selecting system Python for retry 3A |
-| v1.0.9  | 2026-04-20 | Fix: vivtc.dll missing from deps bundle (IVTC/Inverse Telecine failed on clean installs); deps upgraded to v8 |
-| v1.0.8  | 2026-04-20 | Fix: false MISS for VapourSynth.dll in diagnostic (R74 renamed it to libvapoursynth.dll) |
-| v1.0.7  | 2026-04-19 | Fix: Python 3.13+ support via VapourSynth R74+ in deps bundle (R73 only supported 3.8–3.12) |
-| v1.0.4  | 2026-04-19 | Release: Python 3.13+ VSScript fallback; manual crop mod-2 width/height auto-correction |
-| Beta-03b | 2026-04-19 | Fix odd-width crash from manual crop (YUV422 mod-2 width constraint) |
-| Beta-03a | 2026-04-19 | Fix odd-height crash from manual crop (SeparateFields mod-2 height constraint) |
-| Beta-03  | 2026-04-18 | Python 3.13+ compatibility via bundled vapoursynth.pyd, bypassing VSScript |
+| 1.4.1 | 2026-06-07 | .MOD file support; 16:9 widescreen PAR fix; crop page recommendation |
 | Beta-02b | 2026-04-05 | Fix RGB source support; faster launch via persistent cache dir |
 | Beta-02 | 2026-03-28 | Portable ZIP; first-run auto-setup; no installer |
 | Beta-01 | 2026-03-23 | Inno Setup installer; manual FFmpeg/VapourSynth install |
