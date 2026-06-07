@@ -1,7 +1,10 @@
 # VCG Deinterlacer
-### Beta-02 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
+by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
-A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
+The recommended way to digitize analog tapes is to use a capture device that preserves the original interlaced video, and then use software to de-interlace. There are many good software tools that can do this job, including the indespensible Selur Hybrid, which has tons of useful tools including deinterlacing. I decided to make this software to give me a quicker and easier way to dei-interlace my own files. Then I put it on GitHub for everyone else.
+
+VCG Deinterlacer is free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
+
 
 ---
 
