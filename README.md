@@ -10,7 +10,7 @@ VCG Deinterlacer is free Windows tool for deinterlacing VHS, Hi8, Video8, and Mi
 
 ## Download
 
-**[Download VCG_Deinterlacer.exe — Beta-02](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
+**[Download VCG_Deinterlacer](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
 
 Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
 
