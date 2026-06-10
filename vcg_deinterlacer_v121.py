@@ -55,8 +55,8 @@
 # ============================================================
 
 # Version constants
-VERSION = "1.4.1"
-BUILD_DATE = "2026-06-07"
+VERSION = "1.5.0"
+BUILD_DATE = "2026-06-10"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -1313,40 +1313,194 @@ def analyze_noise_level(filepath, sample_frames=15, progress_callback=None):
     # counts pixels that change in a way that is inconsistent with their neighbours
     # (i.e. speckle/grain, not smooth motion).
     #
-    # Old thresholds (4/8/15 for YDIF, OR logic) flagged virtually all motion
-    # video as noisy.  New thresholds:
-    #   - YDIF raised to 10/20/30 to account for normal motion.
-    #   - For "light" noise we require BOTH YDIF AND TOUT to be elevated,
-    #     so motion alone does not trigger a recommendation.
-    #   - "Moderate" and "heavy" still trigger on TOUT alone because high
-    #     temporal outlier counts are nearly always genuine noise.
-    if avg_diff > 30 or avg_variance > 0.12:
+    # TOUT thresholds were previously too conservative (0.06 for moderate) and
+    # missed most genuine VHS tape noise.  TOUT > 0.03 (3% of pixels are
+    # temporal outliers) is a reliable indicator of tape noise on VHS content,
+    # so the classifier now leads on TOUT with lower cut-offs (0.012 / 0.03 /
+    # 0.08) and keeps YDIF as a secondary trigger.
+    # 'trigger' records which metric crossed the threshold, so the UI can show
+    # the right number next to the recommendation (a quiet tape with heavy
+    # motion can be classified via YDIF while its TOUT score stays low).
+    if avg_variance > 0.08 or avg_diff > 30:
         noise_level = 'heavy'
         noise_desc = 'Heavy noise detected'
         recommendation = 'heavy'
-    elif avg_diff > 20 or avg_variance > 0.06:
+        trigger = 'tout' if avg_variance > 0.08 else 'ydif'
+    elif avg_variance > 0.03 or avg_diff > 20:
         noise_level = 'moderate'
         noise_desc = 'Moderate noise detected'
         recommendation = 'moderate'
-    elif avg_diff > 10 and avg_variance > 0.02:
-        # Require BOTH to be elevated — prevents flagging clean fast-motion video.
+        trigger = 'tout' if avg_variance > 0.03 else 'ydif'
+    elif avg_variance > 0.012 or avg_diff > 12:
         noise_level = 'light'
         noise_desc = 'Light noise detected'
         recommendation = 'moderate'
+        trigger = 'tout' if avg_variance > 0.012 else 'ydif'
     else:
         noise_level = 'clean'
         noise_desc = 'Video appears clean'
         recommendation = 'none'
-    
+        trigger = 'tout'
+
     return {
         'noise_level': noise_level,
         'noise_desc': noise_desc,
         'recommendation': recommendation,
+        'trigger': trigger,
         'avg_diff': avg_diff,
         'std_diff': std_diff,
         'avg_variance': avg_variance,
         'samples_analyzed': len(diff_values),
         'analyzed': len(diff_values) >= 3,  # require at least 3 good samples
+    }
+
+def analyze_halo_level(filepath, sample_frames=8, progress_callback=None):
+    """Detect edge halos (sharpening ringing) by measuring luma overshoot.
+
+    Halos from VHS sharpening circuits / capture-card edge enhancement appear
+    as bright ghost bands a few pixels to the side of strong vertical edges.
+    For each sampled frame this scans luma rows horizontally: at every strong
+    edge it compares the pixels just past the bright side (where a halo would
+    sit) against the plateau further out.  An edge "has a halo" when the near
+    zone overshoots the plateau.  The halo score is the fraction of strong
+    edges that overshoot.
+
+    Horizontal-only scanning is deliberate: analog sharpening operates along
+    the scanline, and row-wise reads are immune to interlacing comb.
+    """
+    if not HAS_PIL:
+        return {'analyzed': False, 'halo_ratio': 0, 'edges_analyzed': 0,
+                'halo_level': 'unknown', 'recommendation': 'none'}
+
+    try:
+        cmd = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', filepath]
+        result = run_hidden(cmd, timeout=30)
+        duration = float(result.stdout.strip())
+    except:
+        duration = 60
+
+    EDGE_THRESH = 40        # min luma gradient to count as a strong edge
+    OVERSHOOT_THRESH = 14   # near-zone excess over the plateau = halo
+
+    sample_points = [0.2 + (0.6 * i / (sample_frames - 1)) for i in range(sample_frames)]
+    temp_dir = os.environ.get('TEMP', os.path.dirname(filepath))
+    total_edges = 0
+    halo_edges = 0
+
+    for idx, offset in enumerate(sample_points):
+        if progress_callback:
+            progress_callback(idx + 1, sample_frames)
+        frame_path = os.path.join(temp_dir, f'halo_frame_{os.getpid()}_{idx}.png')
+        try:
+            cmd = [
+                FFMPEG_PATH, '-fflags', '+discardcorrupt',
+                '-ss', str(duration * offset), '-i', filepath, '-vframes', '1',
+                '-update', '1', '-y', frame_path
+            ]
+            result = run_hidden(cmd, timeout=30)
+            if result.returncode != 0 or not os.path.exists(frame_path):
+                continue
+
+            img = Image.open(frame_path).convert('L')
+            w, h = img.size
+            if w < 64 or h < 64:
+                continue
+            px = img.load()
+
+            def probe(x, y):
+                """Classify the pixel column at (x, y).
+
+                Returns None if there is no strong edge here, or either side's
+                far zone is not a settled plateau (busy texture is
+                indeterminate and must not vote, otherwise detailed scenes all
+                read as haloed).  Returns True only when the edge shows the
+                two-sided sharpening signature — bright-side overshoot AND
+                dark-side undershoot.  Content that merely has a bright line
+                near an edge (straw, blinds, text) rings on one side only.
+                """
+                grad = px[x + 2, y] - px[x - 2, y]
+                if abs(grad) < EDGE_THRESH:
+                    return None
+                if grad > 0:
+                    bright_dir, dark_dir = 1, -1
+                else:
+                    bright_dir, dark_dir = -1, 1
+                b_near = max(px[x + bright_dir * 4, y], px[x + bright_dir * 5, y],
+                             px[x + bright_dir * 6, y], px[x + bright_dir * 7, y])
+                b_far_vals = [px[x + bright_dir * 11, y], px[x + bright_dir * 12, y],
+                              px[x + bright_dir * 13, y], px[x + bright_dir * 14, y]]
+                d_near = min(px[x + dark_dir * 4, y], px[x + dark_dir * 5, y],
+                             px[x + dark_dir * 6, y], px[x + dark_dir * 7, y])
+                d_far_vals = [px[x + dark_dir * 11, y], px[x + dark_dir * 12, y],
+                              px[x + dark_dir * 13, y], px[x + dark_dir * 14, y]]
+                if max(b_far_vals) - min(b_far_vals) > 20:
+                    return None
+                if max(d_far_vals) - min(d_far_vals) > 20:
+                    return None
+                overshoot = b_near - sum(b_far_vals) / 4 >= OVERSHOOT_THRESH
+                undershoot = sum(d_far_vals) / 4 - d_near >= OVERSHOOT_THRESH * 0.7
+                return overshoot and undershoot
+
+            # Central 75% of rows, every 4th row.  An edge only counts if it
+            # persists two rows down (vertical coherence): real halos are
+            # continuous lines that track their edge, while overshoot from
+            # random texture (foliage, straw, fabric) is incoherent.
+            for y in range(h // 8, h * 7 // 8, 4):
+                x = 16
+                while x < w - 16:
+                    here = probe(x, y)
+                    if here is None:
+                        x += 2
+                        continue
+                    below = None
+                    for dx in (0, -1, 1, -2, 2):
+                        below = probe(x + dx, y + 2)
+                        if below is not None:
+                            break
+                    if below is not None:
+                        total_edges += 1
+                        if here and below:
+                            halo_edges += 1
+                    x += 10  # skip past this edge
+        except Exception:
+            pass
+        finally:
+            try:
+                os.remove(frame_path)
+            except Exception:
+                pass
+
+    if total_edges < 50:
+        # Not enough strong edges to judge (flat/dark content)
+        return {'analyzed': total_edges > 0, 'halo_ratio': 0,
+                'edges_analyzed': total_edges,
+                'halo_level': 'clean', 'recommendation': 'none'}
+
+    halo_ratio = halo_edges / total_edges
+
+    # Thresholds are experimental, calibrated against sample captures: a clean
+    # modern camcorder file measured ~8%, a real VHS capture ~13%, consumer DV
+    # with in-camera sharpening ~17%, and the same camcorder file artificially
+    # over-sharpened (unsharp la=1.8) ~21%.
+    if halo_ratio > 0.30:
+        halo_level = 'strong'
+        recommendation = 'strong'
+    elif halo_ratio > 0.18:
+        halo_level = 'moderate'
+        recommendation = 'light'
+    elif halo_ratio > 0.10:
+        halo_level = 'light'
+        recommendation = 'light'
+    else:
+        halo_level = 'clean'
+        recommendation = 'none'
+
+    return {
+        'analyzed': True,
+        'halo_ratio': halo_ratio,
+        'edges_analyzed': total_edges,
+        'halo_level': halo_level,
+        'recommendation': recommendation,
     }
 
 def analyze_color_bleeding(filepath, sample_frames=10, progress_callback=None):
@@ -1479,7 +1633,12 @@ def analyze_color_bleeding(filepath, sample_frames=10, progress_callback=None):
     }
 
 def generate_histogram_image(filepath, timestamp=None):
-    """Generate waveform monitor image."""
+    """Generate an RGB Parade image (side-by-side R/G/B waveform columns).
+
+    The parade view is the standard pro levels tool — each color channel gets
+    its own waveform column, making per-channel clipping/crush and color casts
+    immediately visible.
+    """
     try:
         cmd = [FFPROBE_PATH, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', filepath]
         result = run_hidden(cmd, timeout=30)
@@ -1491,20 +1650,28 @@ def generate_histogram_image(filepath, timestamp=None):
         timestamp = duration / 2
     temp_dir = os.environ.get('TEMP', os.path.dirname(filepath))
     histogram_path = os.path.join(temp_dir, f'levels_analysis_{os.getpid()}.png')
-    
+
     try:
+        # RGB Parade: display=parade puts each color channel in its own column;
+        # components=7 (bitmask plane0|1|2) shows all three channels.
+        # waveform operates on the input's native planes, so convert YUV→planar
+        # RGB first (format=gbrp) and shuffle G,B,R storage order to R,G,B so
+        # the columns read Red/Green/Blue left to right.  scale height is kept
+        # at the scope's native 256 levels (640:-1 would squash it to ~76px).
         cmd = [
             FFMPEG_PATH, '-fflags', '+discardcorrupt',
             '-ss', str(timestamp), '-i', filepath, '-vframes', '1',
-            '-vf', 'waveform=mode=column:intensity=0.4:graticule=green:flags=numbers+dots,scale=550:-1',
+            '-vf', 'format=gbrp,shuffleplanes=2:0:1,'
+                   'waveform=mode=column:display=parade:intensity=0.4:graticule=green:flags=numbers+dots:components=7,'
+                   'scale=640:256',
             '-update', '1', '-y', histogram_path
         ]
         result = run_hidden(cmd, timeout=60)
         if result.returncode == 0 and os.path.exists(histogram_path):
             return histogram_path
-        print(f"Waveform generation failed: {result.stderr[:300]}")
+        print(f"RGB parade generation failed: {result.stderr[:300]}")
     except Exception as e:
-        print(f"Waveform exception: {e}")
+        print(f"RGB parade exception: {e}")
     return None
 
 def generate_vectorscope_image(filepath, timestamp=None):
@@ -1895,14 +2062,95 @@ def generate_vpy_script(config):
         lines.append('')
 
     # ── Denoising ─────────────────────────────────────────────────────────────
+    # BM3D (frequency-domain, best quality for analog tape noise) is tried
+    # first, then GPU-accelerated KNLMeansCL, then SMDegrain (havsfunc /
+    # MVTools — always bundled) as the final fallback.  The try/except chain
+    # lives in the generated .vpy so the same script works on any _deps set.
     noise_level = config.get('noise_level', 'none')
     if noise_level == 'moderate':
-        lines.append('# Temporal denoising (moderate)')
-        lines.append('clip = haf.SMDegrain(clip, tr=1, thSAD=300)')
+        lines.append('# Temporal denoising (moderate) — BM3D with SMDegrain fallback')
+        lines.append('try:')
+        lines.append('    clip = core.bm3d.BM3D(clip, sigma=[3, 0, 0], radius=1, profile="fast")')
+        lines.append('    clip = core.bm3d.BM3D(clip, ref=clip, sigma=[3, 0, 0], radius=1, profile="fast")')
+        lines.append('except AttributeError:')
+        lines.append('    try:')
+        lines.append('        clip = core.knlm.KNLMeansCL(clip, d=1, a=2, s=4, h=1.2, channels="Y")')
+        lines.append('    except AttributeError:')
+        lines.append('        clip = haf.SMDegrain(clip, tr=1, thSAD=300)  # fallback')
         lines.append('')
     elif noise_level == 'heavy':
-        lines.append('# Temporal denoising (heavy)')
-        lines.append('clip = haf.SMDegrain(clip, tr=2, thSAD=400)')
+        lines.append('# Temporal denoising (heavy) — BM3D with SMDegrain fallback')
+        lines.append('try:')
+        lines.append('    clip = core.bm3d.BM3D(clip, sigma=[6, 0, 0], radius=2, profile="lc")')
+        lines.append('    clip = core.bm3d.BM3D(clip, ref=clip, sigma=[6, 0, 0], radius=2, profile="lc")')
+        lines.append('except AttributeError:')
+        lines.append('    try:')
+        lines.append('        clip = core.knlm.KNLMeansCL(clip, d=2, a=2, s=4, h=2.0, channels="Y")')
+        lines.append('    except AttributeError:')
+        lines.append('        clip = haf.SMDegrain(clip, tr=2, thSAD=400)  # fallback')
+        lines.append('')
+
+    # ── Dehalo ────────────────────────────────────────────────────────────────
+    # The bundled havsfunc removed FineDehalo/DeHalo_alpha (they raise
+    # vs.Error pointing to vs-dehalo, which is not bundled), so a faithful
+    # self-contained port is emitted into the script instead.  It only needs
+    # core std/resize ops, rgvs.Repair (RemoveGrainVS.dll — bundled) and the
+    # havsfunc mask utilities that DO still exist (AvsPrewitt,
+    # mt_expand_multi, mt_inpand_multi).  Luma-only, like the original.
+    dehalo_mode = config.get('dehalo_mode', 'none')
+    if dehalo_mode in ('light', 'strong'):
+        if dehalo_mode == 'light':
+            dh_params = 'rx=2.0, darkstr=0.0, brightstr=0.8'
+        else:
+            dh_params = 'rx=2.4, darkstr=0.3, brightstr=1.0'
+        lines.append(f'# Dehalo ({dehalo_mode}) — FineDehalo port (edge-masked DeHalo_alpha)')
+        lines.append('import math as _vcg_math')
+        lines.append('def _vcg_fine_dehalo(src, rx=2.0, darkstr=0.0, brightstr=1.0):')
+        lines.append('    _m4 = lambda v: max(16, int(_vcg_math.floor(v / 4 + 0.5)) * 4)')
+        lines.append('    y = core.std.ShufflePlanes(src, planes=0, colorfamily=vs.GRAY)')
+        lines.append('    ox, oy = y.width, y.height')
+        lines.append('    # --- DeHalo_alpha: blur-and-repair, masked to halo-prone zones ---')
+        lines.append('    halos = core.resize.Bicubic(y, _m4(ox / rx), _m4(oy / rx))')
+        lines.append('    halos = core.resize.Bicubic(halos, ox, oy, filter_param_a=1, filter_param_b=0)')
+        lines.append("    are  = core.std.Expr([core.std.Maximum(y), core.std.Minimum(y)], 'x y -')")
+        lines.append("    ugly = core.std.Expr([core.std.Maximum(halos), core.std.Minimum(halos)], 'x y -')")
+        lines.append("    so   = core.std.Expr([ugly, are], 'y x - y 0.001 + / 255 * 50 - y 256 + 512 / 0.5 + *')")
+        lines.append('    lets = core.std.MaskedMerge(halos, y, so)')
+        lines.append('    remove = core.rgvs.Repair(y, lets, 1)')
+        lines.append("    them = core.std.Expr([y, remove], f'x y < x x y - {darkstr} * - x x y - {brightstr} * - ?')")
+        lines.append('    # --- FineDehalo edge mask: act on strong edges, protect fine detail ---')
+        lines.append('    edges  = haf.AvsPrewitt(y)')
+        lines.append("    strong = core.std.Expr(edges, 'x 80 - 48 / 255 *')")
+        lines.append('    large  = haf.mt_expand_multi(strong, sw=2, sh=2)')
+        lines.append("    light  = core.std.Expr(edges, 'x 50 - 50 / 255 *')")
+        lines.append("    shrink = haf.mt_expand_multi(light, mode='ellipse', sw=2, sh=2)")
+        lines.append("    shrink = core.std.Expr(shrink, 'x 4 *')")
+        lines.append("    shrink = haf.mt_inpand_multi(shrink, mode='ellipse', sw=2, sh=2)")
+        lines.append('    shrink = core.std.Convolution(shrink, matrix=[1] * 9)')
+        lines.append('    shrink = core.std.Convolution(shrink, matrix=[1] * 9)')
+        lines.append("    outside = core.std.Expr([large, shrink], 'x y max')")
+        lines.append("    outside = core.std.Expr(core.std.Convolution(outside, matrix=[1] * 9), 'x 2 *')")
+        lines.append('    y_out = core.std.MaskedMerge(y, them, outside)')
+        lines.append('    if src.format.color_family == vs.GRAY:')
+        lines.append('        return y_out')
+        lines.append('    return core.std.ShufflePlanes([y_out, src, src], planes=[0, 1, 2], colorfamily=vs.YUV)')
+        lines.append('')
+        lines.append('try:')
+        lines.append(f'    clip = _vcg_fine_dehalo(clip, {dh_params})')
+        lines.append('except Exception:')
+        lines.append('    pass  # dehalo prerequisites unavailable — skipping')
+        lines.append('')
+
+    # ── Film grain overlay (Fun Extras) ──────────────────────────────────────
+    # Runs after denoising, before color/levels correction.  Skipped silently
+    # if the AddGrain plugin is not present in this _deps set.
+    grain_strength = float(config.get('grain_strength', 0) or 0)
+    if grain_strength > 0:
+        lines.append(f'# Film grain overlay (strength {grain_strength:g})')
+        lines.append('try:')
+        lines.append(f'    clip = core.grain.Add(clip, var={grain_strength:.1f}, uvar=0)')
+        lines.append('except AttributeError:')
+        lines.append('    pass  # grain plugin not available — skipping')
         lines.append('')
 
     # ── Legacy chroma-shift flag (kept for back-compat) ──────────────────────
@@ -2044,6 +2292,111 @@ def get_ffmpeg_output_args(config):
     elif fmt == 'lagarith':
         return ['-c:v', 'lagarith', '-pix_fmt', 'yuv420p'], '.avi'
     return ['-c:v', 'prores_ks', '-profile:v', '3'], '.mov'
+
+
+def _estimate_output_width(config):
+    """Best-effort output frame width, mirroring generate_vpy_script() sizing.
+
+    Used to size a logo watermark as a percentage of frame width — the encode
+    input arrives over a pipe, so it cannot be probed.  A small error here is
+    only cosmetic (slightly larger/smaller logo).
+    """
+    if config.get('upscale_enabled', False):
+        try:
+            return int(str(config.get('upscale_resolution', '')).split('x')[0])
+        except (ValueError, IndexError):
+            return 960 if config.get('format', 'ntsc') == 'ntsc' else 1024
+    source_class = config.get('source_classification', {}).get('source_class', 'sd')
+    if source_class in ('avchd', 'hdv'):
+        return 1920
+    capture_method = config.get('capture_method', 'sd')
+    crop_preset = config.get('crop_preset', 'none' if capture_method == 'dv' else 'bt601')
+    video_format = config.get('format', 'ntsc')
+    if crop_preset == 'overscan':
+        return 704
+    if config.get('par_correction', True):
+        if video_format == 'ntsc':
+            return 854 if config.get('detected_sar', '') == '32:27' else 640
+        return 1024 if config.get('detected_sar', '') == '64:45' else 768
+    return 704 if crop_preset == 'bt601' else 720
+
+
+def _drawtext_fontfile_arg():
+    """Return a "fontfile='...':" prefix for drawtext, or '' if none found.
+
+    The bundled FFmpeg's fontconfig cannot locate a default font on Windows,
+    so drawtext silently renders nothing unless given an explicit font file.
+    Colons in the path must be escaped for the filter parser.  All candidates
+    are sans-serif system fonts.
+    """
+    fonts_dir = os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'Fonts')
+    for fname in ('segoeui.ttf', 'arial.ttf', 'calibri.ttf', 'tahoma.ttf'):
+        fpath = os.path.join(fonts_dir, fname)
+        if os.path.exists(fpath):
+            escaped = fpath.replace('\\', '/').replace(':', '\\:')
+            return f"fontfile='{escaped}':"
+    return ''
+
+
+def build_watermark_args(config):
+    """Build FFmpeg watermark arguments from config.
+
+    Returns (extra_inputs, filter_args):
+      extra_inputs — extra ['-i', <path>] args (logo image, if any)
+      filter_args  — ['-vf', <filter>] or ['-filter_complex', <graph>], or []
+    """
+    wm_type = config.get('wm_type', 'none')
+    wm_position = config.get('wm_position', 'bottomright')
+    alpha = float(config.get('wm_opacity', 0.6))
+
+    if wm_type == 'text':
+        text = str(config.get('wm_text', '') or '').strip()
+        if not text:
+            return [], []
+        # drawtext escaping: backslash, colon and quote are filter specials.
+        # % needs \\% — one backslash survives the option parser, the second
+        # escapes the % for drawtext's text expander (a bare % is treated as
+        # a broken %{...} sequence and kills the whole label).
+        text = (text.replace('\\', '\\\\').replace('%', r'\\%')
+                    .replace(':', '\\:').replace("'", "\\'"))
+        # drawtext positioning: w/W is the INPUT width (unlike overlay), so the
+        # text box dimensions are tw/th (text_w/text_h).
+        pos_map = {
+            'bottomright': 'x=w-tw-20:y=h-th-20',
+            'bottomleft':  'x=20:y=h-th-20',
+            'topright':    'x=w-tw-20:y=20',
+            'topleft':     'x=20:y=20',
+            'center':      'x=(w-tw)/2:y=(h-th)/2',
+        }
+        pos_expr = pos_map.get(wm_position, 'x=w-tw-20:y=h-th-20')
+        fsize = int(config.get('wm_fontsize', 28))
+        font_arg = _drawtext_fontfile_arg()
+        wm_filter = (f"drawtext={font_arg}text='{text}':fontcolor=white@{alpha:.2f}"
+                     f":fontsize={fsize}:box=1:boxcolor=black@0.3"
+                     f":boxborderw=4:{pos_expr}")
+        return [], ['-vf', wm_filter]
+
+    elif wm_type == 'logo':
+        logo_path = config.get('wm_logo_path', '')
+        if not logo_path or not os.path.exists(logo_path):
+            return [], []
+        logo_size = float(config.get('wm_logo_size', 0.10))
+        pos_map_logo = {
+            'bottomright': 'W-w-20:H-h-20',
+            'bottomleft':  '20:H-h-20',
+            'topright':    'W-w-20:20',
+            'topleft':     '20:20',
+            'center':      '(W-w)/2:(H-h)/2',
+        }
+        pos_expr = pos_map_logo.get(wm_position, 'W-w-20:H-h-20')
+        # Size the logo as a percentage of the (estimated) output frame width
+        logo_px = max(16, int(round(_estimate_output_width(config) * logo_size)))
+        wm_filter = (f"[1:v]scale={logo_px}:-1,format=rgba,"
+                     f"colorchannelmixer=aa={alpha:.2f}[wm];"
+                     f"[0:v][wm]overlay={pos_expr}")
+        return ['-i', logo_path], ['-filter_complex', wm_filter]
+
+    return [], []
 
 # ============================================================
 # Modern UI Components
@@ -3080,18 +3433,20 @@ class RestorationWizard(BaseWindow):
             "Crop",            # 3  → crumb 2
             "Y/C Delay",       # 4  → crumb 3 "Advanced" ①
             "Noise",           # 5  → crumb 3 "Advanced" ②
-            "Upscale",         # 6  → crumb 3 "Advanced" ③
-            "Color Cast",      # 7  → crumb 3 "Advanced" ④
-            "Levels",          # 8  → crumb 3 "Advanced" ⑤
-            "Audio",           # 9  → crumb 3 "Advanced" ⑥
-            "Finalize",        # 10 → crumb 4
+            "Dehalo",          # 6  → crumb 3 "Advanced" ③
+            "Upscale",         # 7  → crumb 3 "Advanced" ④
+            "Color Cast",      # 8  → crumb 3 "Advanced" ⑤
+            "Levels",          # 9  → crumb 3 "Advanced" ⑥
+            "Audio",           # 10 → crumb 3 "Advanced" ⑦
+            "Watermark",       # 11 → crumb 3 "Advanced" ⑧
+            "Finalize",        # 12 → crumb 4
         ]
         # Breadcrumb display groups: each entry = (label, [step_indices])
         self.crumbs = [
             ("Select File", [1]),
             ("Source",      [2, 3]),
-            ("Advanced",    [4, 5, 6, 7, 8, 9]),
-            ("Finalize",    [10]),
+            ("Advanced",    [4, 5, 6, 7, 8, 9, 10, 11]),
+            ("Finalize",    [12]),
         ]
         self.current_step = 0
         
@@ -3268,12 +3623,13 @@ class RestorationWizard(BaseWindow):
 
         # ── Denoising ───────────────────────────────────────────────
         section_label("Denoising (Advanced Mode)")
-        body_label("When Advanced Mode denoising is enabled, SMDegrain runs after QTGMC:")
+        body_label("When Advanced Mode denoising is enabled, BM3D (or SMDegrain if "
+                   "unavailable) runs after QTGMC:")
         card_text(
-            "Light:   haf.SMDegrain(clip, tr=1, thSAD=300)\n"
-            "Heavy:   haf.SMDegrain(clip, tr=2, thSAD=400)\n\n"
-            "tr = temporal radius (frames to compare)\n"
-            "thSAD = SAD threshold — higher = more aggressive noise removal",
+            "Light:   BM3D sigma=3 (or SMDegrain fallback)\n"
+            "Heavy:   BM3D sigma=6, profile=lc (or SMDegrain fallback)\n\n"
+            "sigma = denoising strength (luma only — chroma untouched)\n"
+            "Fallback order: BM3D → KNLMeansCL (GPU) → SMDegrain (MVTools)",
             mono=True
         )
 
@@ -3464,14 +3820,14 @@ class RestorationWizard(BaseWindow):
         # Update navigation buttons
         self.back_btn.set_disabled(step_index <= 1)
         # On the last advanced page, label the button to indicate Finalize is next
-        if step_index == 9:
+        if step_index == 11:
             self.next_btn.text = "Finalize →"
         else:
             self.next_btn.text = "Next →"
         self.next_btn.set_disabled(False)
         self.next_btn._draw()
 
-        # Show appropriate page (11-step navigation)
+        # Show appropriate page (13-step navigation)
         step_methods = [
             self._page_welcome,         # 0
             self._page_select_file,     # 1
@@ -3479,11 +3835,13 @@ class RestorationWizard(BaseWindow):
             self._page_crop_preset,     # 3  Crop Preset
             self._page_yc_delay,        # 4  Advanced ① Y/C Delay
             self._page_noise,           # 5  Advanced ②
-            self._page_upscale,         # 6  Advanced ③ Upscale
-            self._page_color,           # 7  Advanced ④ Color Cast
-            self._page_levels,          # 8  Advanced ⑤
-            self._page_audio,           # 9  Advanced ⑥
-            self._page_finalize,        # 10
+            self._page_dehalo,          # 6  Advanced ③ Dehalo
+            self._page_upscale,         # 7  Advanced ④ Upscale
+            self._page_color,           # 8  Advanced ⑤ Color Cast
+            self._page_levels,          # 9  Advanced ⑥
+            self._page_audio,           # 10 Advanced ⑦
+            self._page_watermark,       # 11 Advanced ⑧ Watermark / Extras
+            self._page_finalize,        # 12
         ]
 
         if step_index < len(step_methods):
@@ -3523,7 +3881,7 @@ class RestorationWizard(BaseWindow):
 
     def _ask_basic_or_advanced(self):
         """After Crop, let the user choose to process now or configure advanced options."""
-        finalize_step = 10  # "Finalize" in the 11-step list
+        finalize_step = 12  # "Finalize" in the 13-step list
         advanced_step = 4   # First advanced page ("Y/C Delay")
 
         dlg = tk.Toplevel(self)
@@ -3544,7 +3902,8 @@ class RestorationWizard(BaseWindow):
                  font=('Segoe UI', 16, 'bold'), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
         tk.Label(f,
                  text="You can process now using just deinterlacing, or continue to configure "
-                      "optional enhancements (Y/C delay, noise removal, upscale, color analysis, levels, audio).",
+                      "optional enhancements (Y/C delay, noise removal, dehalo, upscale, "
+                      "color analysis, levels, audio, watermark).",
                  font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
                  wraplength=490, justify='left').pack(anchor='w', pady=(8, 20))
 
@@ -3553,10 +3912,13 @@ class RestorationWizard(BaseWindow):
             self.bind('<Return>', lambda e: self._next_step())
             # Set defaults for all skipped advanced pages
             self.config_data.setdefault('noise_level', 'none')
+            self.config_data.setdefault('dehalo_mode', 'none')
             self.config_data.setdefault('upscale_enabled', False)
             self.config_data.setdefault('color_correction', 'none')
             self.config_data.setdefault('levels_adjustment', 'none')
             self.config_data.setdefault('mix_audio', False)
+            self.config_data.setdefault('wm_type', 'none')
+            self.config_data.setdefault('grain_strength', 0.0)
             self._show_step(finalize_step)
 
         def go_advanced():
@@ -3580,7 +3942,7 @@ class RestorationWizard(BaseWindow):
         adv_btn = tk.Frame(btn_row, bg=Colors.BG_CARD, cursor='hand2')
         adv_btn.pack(fill='x', ipady=8)
         adv_lbl = tk.Label(adv_btn,
-                           text="⚙   Advanced Options  (Y/C delay, noise removal, upscale, color, levels, audio)",
+                           text="⚙   Advanced Options  (Y/C delay, noise, dehalo, upscale, color, levels, audio, watermark)",
                            font=('Segoe UI', 11), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD, cursor='hand2')
         adv_lbl.pack()
         adv_btn.bind('<Button-1>', lambda e: go_advanced())
@@ -5361,6 +5723,20 @@ class RestorationWizard(BaseWindow):
                 except Exception:
                     pass
 
+    def _sampling_note(self, parent, text):
+        """Small card explaining where this page's analysis samples came from,
+        so users can judge whether the result is representative of their tape."""
+        note = tk.Frame(parent, bg=Colors.BG_CARD, padx=12, pady=8)
+        note.pack(fill='x', pady=(8, 0))
+        tk.Label(note, text="ⓘ Where the samples come from",
+                 font=('Segoe UI', 9, 'bold'),
+                 fg=Colors.INFO, bg=Colors.BG_CARD).pack(anchor='w')
+        tk.Label(note, text=text,
+                 font=('Segoe UI', 9),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                 wraplength=560, justify='left').pack(anchor='w', pady=(2, 0))
+        return note
+
     def _selectable_label(self, parent, text, font=None, fg=None, bg=None, **kwargs):
         """Create a readonly Entry that looks like a Label but allows text selection/copy."""
         bg = bg or parent.cget('bg')
@@ -5539,7 +5915,7 @@ class RestorationWizard(BaseWindow):
                     font=('Segoe UI', 11, 'bold'), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD)
             self.levels_status_label.pack(pady=(8, 4))
             self.levels_progress_label = tk.Label(self.levels_progress_card,
-                    text="Generating waveform and measuring luma range",
+                    text="Generating RGB parade and measuring luma range",
                     font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD)
             self.levels_progress_label.pack()
             self.levels_preview = ImagePreview(self.page_container)
@@ -5832,30 +6208,59 @@ class RestorationWizard(BaseWindow):
         self._selectable_label(result_card, tech_text,
                 font=('Segoe UI', 12),
                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(anchor='w', pady=(2, 0))
-        
+
+        # Debug readout: raw YDIF so expert users can see why the tool
+        # recommended what it did and override intelligently.
+        ydif_text = f"Motion index: {data.get('avg_diff', 0):.2f}  (YDIF — inter-frame difference; elevated by both noise and scene motion)"
+        self._selectable_label(result_card, ydif_text,
+            font=('Segoe UI', 10),
+            fg=Colors.TEXT_HINT, bg=Colors.BG_CARD).pack(anchor='w', pady=(1, 0))
+
         # === RECOMMENDATION ===
         ttk.Separator(result_card, orient='horizontal').pack(fill='x', pady=(10, 8))
         
         rec = data.get('recommendation', 'none')
-        if rec == 'heavy':
-            rec_text = "💡 Recommendation: Heavy denoising"
-        elif rec == 'moderate':
-            rec_text = "💡 Recommendation: Light denoising"
+        # Quantified score next to the recommendation: show the metric that
+        # actually crossed the threshold, with the band it landed in.
+        bands = {
+            'heavy':    'heavy ≥ 8%',
+            'moderate': 'moderate 3–8%',
+            'light':    'light 1.2–3%',
+            'clean':    'clean < 1.2%',
+        }
+        if data.get('trigger') == 'ydif':
+            score_str = (f"motion index {data.get('avg_diff', 0):.1f} crossed the "
+                         f"{level} threshold (noise score {tout_pct:.2f}%)")
         else:
-            rec_text = "💡 Recommendation: No denoising needed"
-        
+            score_str = f"noise score {tout_pct:.2f}% — {bands.get(level, '')}"
+        if rec == 'heavy':
+            rec_text = f"💡 Recommendation: Heavy denoising  ·  {score_str}"
+        elif rec == 'moderate':
+            rec_text = f"💡 Recommendation: Light denoising  ·  {score_str}"
+        else:
+            rec_text = (f"💡 Recommendation: No denoising needed  ·  {score_str} — "
+                        "but you can still enable it below if your tape looks grainy.")
+
         tk.Label(result_card, text=rec_text,
                 font=('Segoe UI', 10, 'bold'),
-                fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(anchor='w')
-        
+                fg=Colors.ACCENT, bg=Colors.BG_CARD,
+                wraplength=580, justify='left').pack(anchor='w')
+
+        self._sampling_note(self.noise_results_frame,
+            "Noise was measured in 15 one-second segments spaced evenly through "
+            "the middle of the video (20% to 80% of its length — the first and "
+            "last 20% are skipped to avoid leaders, static, and credits). The "
+            "score is the average of all segments, so noise confined to one "
+            "section of the tape may read lower than it looks.")
+
         # Show options
         card = tk.Frame(self.noise_options_frame, bg=Colors.BG_CARD)
         card.pack(fill='x', pady=(10, 0))
         
         options = [
             ("No noise removal", "none", "Keep original grain/noise"),
-            ("Light denoising", "moderate", "SMDegrain with moderate settings"),
-            ("Heavy denoising", "heavy", "SMDegrain with stronger settings")
+            ("Light denoising", "moderate", "BM3D (or SMDegrain if unavailable) with moderate settings"),
+            ("Heavy denoising", "heavy", "BM3D (or SMDegrain if unavailable) with stronger settings")
         ]
         
         for i, (label, value, desc) in enumerate(options):
@@ -5869,6 +6274,201 @@ class RestorationWizard(BaseWindow):
         
         self.noise_var.trace_add('write', lambda *_: self.config_data.update({'noise_level': self.noise_var.get()}))
     
+    # ==================== DEHALO PAGE ====================
+
+    def _page_dehalo(self):
+        tk.Label(self.page_container, text="Dehalo",
+                font=('Segoe UI', 22, 'bold'),
+                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+
+        tk.Label(self.page_container,
+                text="Halos are bright ghost outlines along strong edges, caused by VHS "
+                     "sharpening circuits or capture-card edge enhancement.",
+                font=('Segoe UI', 13, 'bold'),
+                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+                wraplength=620, justify='left').pack(anchor='w', pady=(4, 14))
+
+        self._show_experimental_notice(self.page_container)
+
+        initial_dehalo = self.config_data.get('dehalo_mode', 'none')
+        self.config_data['dehalo_mode'] = initial_dehalo
+        self.dehalo_var = tk.StringVar(value=initial_dehalo)
+
+        # Batch mode: no analysis, just the options
+        num_files = len(self.config_data.get('input_files', []))
+        if num_files > 1:
+            tk.Label(self.page_container,
+                    text=f"Analysis not available in batch mode ({num_files} files selected). "
+                         "Choose a level to apply to all files, or process one at a time for auto-analysis.",
+                    font=('Segoe UI', 13, 'bold'),
+                    fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+                    wraplength=580, justify='left').pack(anchor='w', pady=(4, 20))
+            self._show_dehalo_options(self.page_container)
+            return
+
+        # Single file — progress card + threaded analysis
+        self.dehalo_progress_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=20, pady=20)
+        self.dehalo_progress_card.pack(fill='x', pady=(10, 0))
+
+        self.dehalo_spinner_label = tk.Label(self.dehalo_progress_card, text="⏳",
+                font=('Segoe UI', 28),
+                fg=Colors.ACCENT, bg=Colors.BG_CARD)
+        self.dehalo_spinner_label.pack()
+
+        self.dehalo_status_label = tk.Label(self.dehalo_progress_card,
+                text="Analyzing edges for halos...",
+                font=('Segoe UI', 12, 'bold'),
+                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD)
+        self.dehalo_status_label.pack(pady=(10, 5))
+
+        self.dehalo_progress_label = tk.Label(self.dehalo_progress_card,
+                text="Sampling frame 1 of 8",
+                font=('Segoe UI', 12),
+                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD)
+        self.dehalo_progress_label.pack()
+
+        self.dehalo_results_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        self.dehalo_results_frame.pack(fill='x')
+
+        self.dehalo_options_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        self.dehalo_options_frame.pack(fill='x', pady=(10, 0))
+
+        self.dehalo_analysis_complete = False
+        self._animate_dehalo_spinner()
+        threading.Thread(target=self._run_dehalo_analysis, daemon=True).start()
+
+    def _show_dehalo_options(self, parent):
+        """The three dehalo radio options (shared by analysis/batch/error paths)."""
+        card = tk.Frame(parent, bg=Colors.BG_CARD)
+        card.pack(fill='x')
+
+        options = [
+            ("No dehalo", "none", "Edges look clean — no ghost outlines"),
+            ("Light dehalo", "light", "Removes bright halos only, protects fine detail and dark edges"),
+            ("Strong dehalo", "strong", "Removes bright and dark halos — for heavily oversharpened tapes"),
+        ]
+        for i, (label, value, desc) in enumerate(options):
+            ModernRadioButton(card, label, self.dehalo_var, value, desc).pack(fill='x')
+            if i < len(options) - 1:
+                ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
+
+        self.dehalo_var.trace_add('write', lambda *_: self.config_data.update(
+            {'dehalo_mode': self.dehalo_var.get()}))
+
+    def _animate_dehalo_spinner(self):
+        if not hasattr(self, 'dehalo_analysis_complete') or self.dehalo_analysis_complete:
+            return
+        if not hasattr(self, 'dehalo_spinner_label') or not self.dehalo_spinner_label.winfo_exists():
+            return
+        spinners = ['⏳', '⌛']
+        current = self.dehalo_spinner_label.cget('text')
+        next_idx = (spinners.index(current) + 1) % len(spinners) if current in spinners else 0
+        self.dehalo_spinner_label.config(text=spinners[next_idx])
+        self.after(500, self._animate_dehalo_spinner)
+
+    def _update_dehalo_progress(self, current, total):
+        if hasattr(self, 'dehalo_progress_label') and self.dehalo_progress_label.winfo_exists():
+            self.after(0, lambda: self.dehalo_progress_label.config(
+                text=f"Sampling frame {current} of {total}"))
+
+    def _run_dehalo_analysis(self):
+        if 'input_path' not in self.config_data:
+            self.after(0, self._finish_dehalo_analysis_error, "❌ No file selected")
+            return
+        try:
+            halo_data = analyze_halo_level(
+                self.config_data['input_path'],
+                sample_frames=8,
+                progress_callback=self._update_dehalo_progress
+            )
+            if halo_data and halo_data.get('analyzed'):
+                self.config_data['halo_data'] = halo_data
+                self.after(0, lambda: self._show_dehalo_results(halo_data))
+            else:
+                self.after(0, self._finish_dehalo_analysis_error,
+                           "Could not analyze halos (not enough edges found)")
+        except Exception as e:
+            self.after(0, self._finish_dehalo_analysis_error, f"Analysis error: {str(e)[:30]}")
+
+    def _finish_dehalo_analysis_error(self, message):
+        self.dehalo_analysis_complete = True
+        if hasattr(self, 'dehalo_progress_card'):
+            self.dehalo_progress_card.pack_forget()
+        tk.Label(self.dehalo_results_frame, text=message,
+                font=('Segoe UI', 12),
+                fg=Colors.ERROR, bg=Colors.BG_MAIN).pack(anchor='w', pady=(0, 10))
+        self._show_dehalo_options(self.dehalo_options_frame)
+
+    def _show_dehalo_results(self, data):
+        self.dehalo_analysis_complete = True
+        # User may have navigated away while the analysis thread was running
+        if not (hasattr(self, 'dehalo_results_frame')
+                and self.dehalo_results_frame.winfo_exists()):
+            return
+        if hasattr(self, 'dehalo_progress_card'):
+            self.dehalo_progress_card.pack_forget()
+
+        result_card = tk.Frame(self.dehalo_results_frame, bg=Colors.BG_CARD, padx=15, pady=12)
+        result_card.pack(fill='x')
+
+        tk.Label(result_card, text="📊 Halo Analysis",
+                font=('Segoe UI', 10, 'bold'),
+                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w')
+
+        level = data.get('halo_level', 'unknown')
+        if level == 'strong':
+            icon, color, desc = "🔴", Colors.ERROR, "Strong halos detected"
+        elif level == 'moderate':
+            icon, color, desc = "🟠", Colors.WARNING, "Moderate halos detected"
+        elif level == 'light':
+            icon, color, desc = "🟡", Colors.WARNING, "Light halos detected"
+        else:
+            icon, color, desc = "🟢", Colors.SUCCESS, "Edges appear clean"
+
+        tk.Label(result_card, text=f"{icon} {desc}",
+                font=('Segoe UI', 12),
+                fg=color, bg=Colors.BG_CARD).pack(anchor='w', pady=(3, 0))
+
+        ratio_pct = data.get('halo_ratio', 0) * 100
+        edges = data.get('edges_analyzed', 0)
+        tech_text = (f"Halo score: {ratio_pct:.1f}% of strong edges show ringing  "
+                     f"({edges} edges analyzed)")
+        self._selectable_label(result_card, tech_text,
+                font=('Segoe UI', 12),
+                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(anchor='w', pady=(2, 0))
+
+        # === RECOMMENDATION ===
+        ttk.Separator(result_card, orient='horizontal').pack(fill='x', pady=(10, 8))
+
+        rec = data.get('recommendation', 'none')
+        bands = {'strong': 'strong > 30%', 'moderate': 'moderate 18–30%',
+                 'light': 'light 10–18%', 'clean': 'clean < 10%'}
+        score_str = f"halo score {ratio_pct:.1f}% — {bands.get(level, '')}"
+        if rec == 'strong':
+            rec_text = f"💡 Recommendation: Strong dehalo  ·  {score_str}"
+        elif rec == 'light':
+            rec_text = f"💡 Recommendation: Light dehalo  ·  {score_str}"
+        else:
+            rec_text = (f"💡 Recommendation: No dehalo needed  ·  {score_str} — "
+                        "but you can still enable it below if you see edge ghosting.")
+
+        tk.Label(result_card, text=rec_text,
+                font=('Segoe UI', 10, 'bold'),
+                fg=Colors.ACCENT, bg=Colors.BG_CARD,
+                wraplength=580, justify='left').pack(anchor='w')
+
+        self._sampling_note(self.dehalo_results_frame,
+            "Edges were examined in 8 frames spaced evenly through the middle "
+            "of the video (20% to 80% of its length — the first and last 20% "
+            "are skipped to avoid leaders, static, and credits). If halos only "
+            "affect certain scenes, the average may understate them.")
+
+        self._show_dehalo_options(self.dehalo_options_frame)
+
+        # Pre-select based on recommendation
+        self.dehalo_var.set(rec)
+        self.config_data['dehalo_mode'] = rec
+
     def _page_dropouts(self):
         tk.Label(self.page_container, text="Dropout Removal",
                 font=('Segoe UI', 22, 'bold'),
@@ -6214,7 +6814,7 @@ class RestorationWizard(BaseWindow):
                 lbl.bind('<Button-1>', lambda _e, a=_activate: a())
                 return lbl
 
-            _tab_hist = _make_color_tab("RGB Histogram", 'histogram')
+            _tab_hist = _make_color_tab("RGB Histogram (stacked)", 'histogram')
             _tab_vs   = _make_color_tab("Vectorscope",   'vectorscope')
 
             def _refresh_color_tab_style():
@@ -6246,7 +6846,14 @@ class RestorationWizard(BaseWindow):
             tk.Label(result_card, text=f"⚠️ Detected {data['color_cast']} color cast",
                     font=('Segoe UI', 12),
                     fg=Colors.WARNING, bg=Colors.BG_CARD).pack(anchor='w', pady=(5, 0))
-        
+
+        self._sampling_note(self.color_results_frame,
+            "Color was measured in 10 frames spaced evenly across the full "
+            "length of the video. A cast must be consistent across those "
+            "samples to be flagged, so a tint affecting only one scene won't "
+            "trigger a recommendation. The vectorscope/histogram image shows a "
+            "single frame from the midpoint of the video.")
+
         # Show options
         card = tk.Frame(self.color_options_frame, bg=Colors.BG_CARD)
         card.pack(fill='x')
@@ -6309,7 +6916,7 @@ class RestorationWizard(BaseWindow):
         self.levels_status_label.pack(pady=(10, 5))
         
         self.levels_progress_label = tk.Label(self.levels_progress_card, 
-                text="Generating waveform and measuring luma range",
+                text="Generating RGB parade and measuring luma range",
                 font=('Segoe UI', 12),
                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD)
         self.levels_progress_label.pack()
@@ -6369,8 +6976,8 @@ class RestorationWizard(BaseWindow):
             scope_duration = 60.0
         scope_ts = scope_duration * 0.5
 
-        # Generate waveform monitor image
-        self.after(0, lambda: self.levels_status_label.config(text="Generating waveform monitor..."))
+        # Generate RGB parade image
+        self.after(0, lambda: self.levels_status_label.config(text="Generating RGB parade..."))
         waveform_path = None
         try:
             waveform_path = generate_histogram_image(filepath, timestamp=scope_ts)
@@ -6442,9 +7049,15 @@ class RestorationWizard(BaseWindow):
 
         hdr = tk.Frame(scope_outer, bg=Colors.BG_MAIN)
         hdr.pack(fill='x', pady=(0, 4))
-        tk.Label(hdr, text="Waveform Monitor",
+        tk.Label(hdr, text="RGB Parade (R · G · B)",
                  font=('Segoe UI', 11, 'bold'),
                  fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(side='left')
+        tk.Label(scope_outer,
+                 text="Red / Green / Blue channels shown left to right — used for "
+                      "level-matching and color cast diagnosis.",
+                 font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+                 wraplength=580, justify='left').pack(anchor='w', pady=(0, 4))
 
         self._scope_preview = ImagePreview(scope_outer)
         self._scope_preview.pack(fill='x')
@@ -6455,7 +7068,7 @@ class RestorationWizard(BaseWindow):
                     self._scope_waveform_path, max_width=580, max_height=300)
             else:
                 self._scope_preview.image_label.config(
-                    text="⚠ Waveform not available", fg=Colors.WARNING,
+                    text="⚠ RGB parade not available", fg=Colors.WARNING,
                     font=('Segoe UI', 11))
 
         _show_scope_image()
@@ -6511,7 +7124,14 @@ class RestorationWizard(BaseWindow):
             tk.Label(result_card, text="✓ Levels within legal range",
                     font=('Segoe UI', 12),
                     fg=Colors.SUCCESS, bg=Colors.BG_CARD).pack(anchor='w', pady=(5, 0))
-        
+
+        self._sampling_note(self.levels_results_frame,
+            "Brightness was measured in 10 frames spaced evenly across the "
+            "full length of the video; Min/Max are the extremes seen in any of "
+            "those samples. The RGB parade above shows a single frame (the "
+            "midpoint by default) — use the Frame scrubber to inspect other "
+            "parts of the tape.")
+
         # Options
         card = tk.Frame(self.levels_options_frame, bg=Colors.BG_CARD)
         card.pack(fill='x')
@@ -6661,6 +7281,218 @@ class RestorationWizard(BaseWindow):
                  fg='#D0A060', bg='#2A1500',
                  wraplength=580, justify='left').pack(anchor='w', pady=(6, 0))
     
+    def _page_watermark(self):
+        tk.Label(self.page_container, text="Watermark",
+                font=('Segoe UI', 22, 'bold'),
+                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+
+        tk.Label(self.page_container,
+                text="Optionally overlay text or a logo on the restored video.",
+                font=('Segoe UI', 13, 'bold'),
+                fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(4, 14))
+
+        self._show_experimental_notice(self.page_container)
+
+        # Defaults (persist across page revisits within the session)
+        self.config_data.setdefault('wm_type', 'none')
+        self.config_data.setdefault('wm_text', '@VideoCaptureGuide')
+        self.config_data.setdefault('wm_position', 'bottomright')
+        self.config_data.setdefault('wm_opacity', 0.6)
+        self.config_data.setdefault('wm_fontsize', 28)
+        self.config_data.setdefault('wm_logo_path', '')
+        self.config_data.setdefault('wm_logo_size', 0.10)
+        self.config_data.setdefault('grain_strength', 0.0)
+
+        self.wm_type_var = tk.StringVar(value=self.config_data['wm_type'])
+
+        card = tk.Frame(self.page_container, bg=Colors.BG_CARD)
+        card.pack(fill='x')
+        wm_options = [
+            ("No watermark", "none", "Clean output — recommended for archival copies"),
+            ("Text watermark", "text", "Overlay a caption such as your channel handle"),
+            ("Logo / image watermark", "logo", "Overlay a PNG/image logo (transparency supported)"),
+        ]
+        for i, (label, value, desc) in enumerate(wm_options):
+            ModernRadioButton(card, label, self.wm_type_var, value, desc).pack(fill='x')
+            if i < len(wm_options) - 1:
+                ttk.Separator(card, orient='horizontal').pack(fill='x', padx=12)
+
+        # ── Shared option vars / styled widget helpers ────────────────────────
+        positions = [("Bottom-right", 'bottomright'), ("Bottom-left", 'bottomleft'),
+                     ("Top-right", 'topright'), ("Top-left", 'topleft'),
+                     ("Center", 'center')]
+        pos_by_label = dict(positions)
+        label_by_pos = {v: k for k, v in positions}
+
+        self._wm_pos_label_var = tk.StringVar(
+            value=label_by_pos.get(self.config_data['wm_position'], "Bottom-right"))
+        self._wm_pos_label_var.trace_add('write', lambda *_: self.config_data.update(
+            {'wm_position': pos_by_label.get(self._wm_pos_label_var.get(), 'bottomright')}))
+
+        # Opacity is shared between text and logo modes (single config key)
+        self._wm_opacity_var = tk.IntVar(value=int(round(self.config_data['wm_opacity'] * 100)))
+        self._wm_opacity_var.trace_add('write', lambda *_: self.config_data.update(
+            {'wm_opacity': self._wm_opacity_var.get() / 100.0}))
+
+        def dark_optionmenu(parent, var, values):
+            om = tk.OptionMenu(parent, var, *values)
+            om.config(bg=Colors.BG_DARK, fg=Colors.TEXT_PRIMARY,
+                      activebackground=Colors.BG_CARD_HOVER,
+                      activeforeground=Colors.TEXT_PRIMARY,
+                      highlightthickness=1, highlightbackground=Colors.BORDER,
+                      relief='flat', font=('Segoe UI', 10))
+            om['menu'].config(bg=Colors.BG_CARD, fg=Colors.TEXT_PRIMARY,
+                              activebackground=Colors.ACCENT,
+                              activeforeground='white',
+                              font=('Segoe UI', 10))
+            return om
+
+        def dark_scale(parent, frm, to, var):
+            return tk.Scale(parent, from_=frm, to=to, orient='horizontal',
+                            variable=var, length=300, showvalue=True,
+                            bg=Colors.BG_CARD, fg=Colors.TEXT_PRIMARY,
+                            highlightthickness=0, troughcolor=Colors.BG_DARK,
+                            activebackground=Colors.ACCENT,
+                            font=('Segoe UI', 9))
+
+        def option_row(parent, label_text):
+            row = tk.Frame(parent, bg=Colors.BG_CARD)
+            row.pack(fill='x', pady=(8, 0))
+            tk.Label(row, text=label_text, font=('Segoe UI', 11),
+                     fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD,
+                     width=14, anchor='w').pack(side='left')
+            return row
+
+        # ── Text watermark sub-options (shown when 'text' selected) ──────────
+        self._wm_text_frame = tk.Frame(self.page_container, bg=Colors.BG_CARD,
+                                       padx=16, pady=12)
+
+        row = option_row(self._wm_text_frame, "Text")
+        self._wm_text_var = tk.StringVar(value=self.config_data['wm_text'])
+        self._wm_text_var.trace_add('write', lambda *_: self.config_data.update(
+            {'wm_text': self._wm_text_var.get()}))
+        tk.Entry(row, textvariable=self._wm_text_var,
+                 font=('Segoe UI', 11), width=32,
+                 bg=Colors.BG_DARK, fg=Colors.TEXT_PRIMARY,
+                 insertbackground=Colors.TEXT_PRIMARY,
+                 relief='flat', highlightthickness=1,
+                 highlightbackground=Colors.BORDER,
+                 highlightcolor=Colors.BORDER_FOCUS).pack(side='left', ipady=4)
+
+        row = option_row(self._wm_text_frame, "Position")
+        dark_optionmenu(row, self._wm_pos_label_var,
+                        [p[0] for p in positions]).pack(side='left')
+
+        row = option_row(self._wm_text_frame, "Opacity")
+        dark_scale(row, 20, 100, self._wm_opacity_var).pack(side='left')
+        tk.Label(row, text="%", font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(6, 0))
+
+        row = option_row(self._wm_text_frame, "Font size")
+        fontsizes = [("Small", 18), ("Medium", 28), ("Large", 42)]
+        size_by_label = dict(fontsizes)
+        label_by_size = {v: k for k, v in fontsizes}
+        self._wm_fontsize_var = tk.StringVar(
+            value=label_by_size.get(self.config_data['wm_fontsize'], "Medium"))
+        self._wm_fontsize_var.trace_add('write', lambda *_: self.config_data.update(
+            {'wm_fontsize': size_by_label.get(self._wm_fontsize_var.get(), 28)}))
+        dark_optionmenu(row, self._wm_fontsize_var,
+                        [f[0] for f in fontsizes]).pack(side='left')
+
+        # ── Logo watermark sub-options (shown when 'logo' selected) ──────────
+        self._wm_logo_frame = tk.Frame(self.page_container, bg=Colors.BG_CARD,
+                                       padx=16, pady=12)
+
+        row = option_row(self._wm_logo_frame, "Logo file")
+        _logo_name = os.path.basename(self.config_data['wm_logo_path'])
+        self._wm_logo_lbl = tk.Label(row, text=_logo_name or "No file selected",
+                font=('Segoe UI', 10),
+                fg=Colors.TEXT_PRIMARY if _logo_name else Colors.TEXT_SECONDARY,
+                bg=Colors.BG_CARD)
+
+        def _pick_logo():
+            path = filedialog.askopenfilename(
+                title="Choose a logo image",
+                filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"),
+                           ("All files", "*.*")])
+            if path:
+                self.config_data['wm_logo_path'] = path
+                self._wm_logo_lbl.config(text=os.path.basename(path),
+                                         fg=Colors.TEXT_PRIMARY)
+
+        ModernButton(row, "Browse…", command=_pick_logo,
+                     width=110, height=30).pack(side='left')
+        self._wm_logo_lbl.pack(side='left', padx=(10, 0))
+
+        row = option_row(self._wm_logo_frame, "Position")
+        dark_optionmenu(row, self._wm_pos_label_var,
+                        [p[0] for p in positions]).pack(side='left')
+
+        row = option_row(self._wm_logo_frame, "Size")
+        self._wm_logo_size_var = tk.IntVar(
+            value=int(round(self.config_data['wm_logo_size'] * 100)))
+        self._wm_logo_size_var.trace_add('write', lambda *_: self.config_data.update(
+            {'wm_logo_size': self._wm_logo_size_var.get() / 100.0}))
+        dark_scale(row, 5, 30, self._wm_logo_size_var).pack(side='left')
+        tk.Label(row, text="% of frame width", font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(6, 0))
+
+        row = option_row(self._wm_logo_frame, "Opacity")
+        dark_scale(row, 20, 100, self._wm_opacity_var).pack(side='left')
+        tk.Label(row, text="%", font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(6, 0))
+
+        # ── ✨ Fun Extras ──────────────────────────────────────────────────────
+        extras_sep = ttk.Separator(self.page_container, orient='horizontal')
+        extras_sep.pack(fill='x', pady=(20, 0))
+
+        tk.Label(self.page_container, text="✨ Fun Extras",
+                 font=('Segoe UI', 14, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(12, 0))
+        tk.Label(self.page_container,
+                 text="These are optional effects that add personality to your restored video "
+                      "— not part of standard preservation workflow.",
+                 font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+                 wraplength=580, justify='left').pack(anchor='w', pady=(2, 8))
+
+        grain_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=12)
+        grain_card.pack(fill='x')
+        tk.Label(grain_card, text="Add subtle film grain",
+                 font=('Segoe UI', 12, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w')
+        tk.Label(grain_card,
+                 text="Adds subtle organic texture. Good for masking BM3D's smoothing artifacts.",
+                 font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                 wraplength=560, justify='left').pack(anchor='w', pady=(2, 4))
+
+        grain_row = tk.Frame(grain_card, bg=Colors.BG_CARD)
+        grain_row.pack(fill='x')
+        tk.Label(grain_row, text="Grain strength", font=('Segoe UI', 11),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD,
+                 width=14, anchor='w').pack(side='left')
+        self._grain_var = tk.IntVar(value=int(round(self.config_data['grain_strength'])))
+        self._grain_var.trace_add('write', lambda *_: self.config_data.update(
+            {'grain_strength': float(self._grain_var.get())}))
+        dark_scale(grain_row, 0, 10, self._grain_var).pack(side='left')
+        tk.Label(grain_row, text="0 = off", font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(6, 0))
+
+        # ── Show/hide sub-option frames based on watermark type ──────────────
+        def _update_wm_subframes(*_):
+            t = self.wm_type_var.get()
+            self.config_data['wm_type'] = t
+            self._wm_text_frame.pack_forget()
+            self._wm_logo_frame.pack_forget()
+            if t == 'text':
+                self._wm_text_frame.pack(fill='x', pady=(10, 0), before=extras_sep)
+            elif t == 'logo':
+                self._wm_logo_frame.pack(fill='x', pady=(10, 0), before=extras_sep)
+
+        self.wm_type_var.trace_add('write', _update_wm_subframes)
+        _update_wm_subframes()
+
     def _page_finalize(self):
         """Step 7 — Finalize (alias for _page_output_and_process)."""
         self._page_output_and_process()
@@ -7362,9 +8194,11 @@ class RestorationWizard(BaseWindow):
                 diag.section("Detected Parameters / Settings")
                 _diag_keys = [
                     'video_format', 'field_order', 'capture_method', 'crop_preset',
-                    'yc_delay', 'ivtc_mode', 'noise_level',
+                    'yc_delay', 'ivtc_mode', 'noise_level', 'dehalo_mode',
                     'color_cast_correction', 'levels_correction', 'audio_mode',
                     'output_format', 'par_correction', 'mix_audio', 'save_diagnostic_log',
+                    'wm_type', 'wm_text', 'wm_position', 'wm_opacity', 'wm_fontsize',
+                    'wm_logo_path', 'wm_logo_size', 'grain_strength',
                 ]
                 for _k in _diag_keys:
                     if _k in file_config:
@@ -7499,7 +8333,13 @@ class RestorationWizard(BaseWindow):
         # vspipe writes y4m to stdout ('-'); FFmpeg reads from pipe:0.
         # This eliminates the intermediate temp y4m file that can be hundreds
         # of GB for long HQ captures, causing "No space left on device" errors.
+        # Watermark overlay (if any) is applied here, after all VS processing.
+        wm_inputs, wm_filter_args = build_watermark_args(file_config)
+        if wm_filter_args:
+            self._log(f"  Applying {file_config.get('wm_type')} watermark")
         _ffmpeg_encode_cmd = [FFMPEG_PATH, '-i', 'pipe:0']
+        _ffmpeg_encode_cmd.extend(wm_inputs)
+        _ffmpeg_encode_cmd.extend(wm_filter_args)
         _ffmpeg_encode_cmd.extend(output_args)
         _ffmpeg_encode_cmd.extend(['-y', str(output_path)])
 
@@ -8023,8 +8863,8 @@ class RestorationWizard(BaseWindow):
             compare_card = tk.Frame(compare_frame, bg=Colors.BG_CARD, padx=15, pady=12)
             compare_card.pack(fill='x')
             
-            cb = tk.Checkbutton(compare_card, 
-                               text="Generate 15-second comparison video",
+            cb = tk.Checkbutton(compare_card,
+                               text="Generate 20-second comparison video",
                                variable=self.compare_var,
                                font=('Segoe UI', 12),
                                fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD,
@@ -8032,9 +8872,9 @@ class RestorationWizard(BaseWindow):
                                activebackground=Colors.BG_CARD,
                                activeforeground=Colors.TEXT_PRIMARY)
             cb.pack(side='left')
-            
-            tk.Label(compare_card, 
-                    text="Side-by-side original vs enhanced",
+
+            tk.Label(compare_card,
+                    text="Side-by-side original vs enhanced (10 s normal + 10 s at 300%)",
                     font=('Segoe UI', 12),
                     fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(10, 0))
             
@@ -8088,42 +8928,81 @@ class RestorationWizard(BaseWindow):
                 else:
                     par_scale = "scale=768:576,scale=640:480"
                 
-                # Create two temp files: normal and closeup
-                # Try to detect if drawtext is available
+                # Try to detect if drawtext is usable.  Note: the bundled
+                # FFmpeg's fontconfig finds no default font on Windows, so
+                # drawtext only renders when given an explicit fontfile —
+                # without one it must be treated as unavailable.
                 test_cmd = [FFMPEG_PATH, '-filters']
                 test_result = run_hidden(test_cmd, timeout=10)
-                has_drawtext = 'drawtext' in test_result.stdout if test_result.stdout else False
+                font_arg = _drawtext_fontfile_arg()
+                has_drawtext = (bool(font_arg)
+                                and 'drawtext' in (test_result.stdout or ''))
 
-                # Single 20-second side-by-side with ORIGINAL | DEINTERLACED labels throughout
+                # 300% zoom = center third of the frame blown up to full size
+                zoom = "crop=iw/3:ih/3,scale=640:480"
+
                 if has_drawtext:
-                    filter_comp = (
-                        f"[0:v]{par_scale}[orig_scaled];"
-                        "[1:v]scale=640:480[enh_scaled];"
-                        "[orig_scaled]crop=320:480:0:0[left_half];"
-                        "[enh_scaled]crop=320:480:320:0[right_half];"
-                        "[left_half][right_half]hstack=inputs=2[stacked];"
-                        "[stacked]drawbox=x=319:y=0:w=2:h=ih:c=white:t=fill,"
-                        "drawbox=x=10:y=10:w=130:h=30:c=black@0.7:t=fill,"
-                        "drawtext=text='ORIGINAL':x=20:y=15:fontsize=20:fontcolor=yellow,"
-                        "drawbox=x=510:y=10:w=155:h=30:c=black@0.7:t=fill,"
-                        "drawtext=text='DEINTERLACED':x=520:y=15:fontsize=20:fontcolor=yellow"
-                    )
+                    def seg_labels(left_text, right_text):
+                        return (
+                            "drawbox=x=319:y=0:w=2:h=ih:c=white:t=fill,"
+                            f"drawtext={font_arg}text='{left_text}':x=20:y=15"
+                            ":fontsize=20:fontcolor=yellow:box=1:boxcolor=black@0.7:boxborderw=6,"
+                            f"drawtext={font_arg}text='{right_text}':x=w-tw-20:y=15"
+                            ":fontsize=20:fontcolor=yellow:box=1:boxcolor=black@0.7:boxborderw=6"
+                        )
+                    seg_a_lbl = seg_labels('Original', 'Deinterlaced')
+                    # A literal % needs \\% in the filter string: the option
+                    # parser strips one backslash, drawtext's text expander
+                    # uses the second to escape the % (a bare % is treated as
+                    # a broken %{...} sequence and kills the whole label).
+                    seg_b_lbl = seg_labels(r'Original (300\\%)', r'Deinterlaced (300\\%)')
                     self.after(0, lambda: self._log("  Using drawtext labels..."))
                 else:
                     # Fallback: colored bars (red = Original, green = Deinterlaced)
-                    filter_comp = (
-                        f"[0:v]{par_scale}[orig_scaled];"
-                        "[1:v]scale=640:480[enh_scaled];"
-                        "[orig_scaled]crop=320:480:0:0[left_half];"
-                        "[enh_scaled]crop=320:480:320:0[right_half];"
-                        "[left_half][right_half]hstack=inputs=2[stacked];"
-                        "[stacked]drawbox=x=319:y=0:w=2:h=ih:c=white:t=fill,"
+                    bars = (
+                        "drawbox=x=319:y=0:w=2:h=ih:c=white:t=fill,"
                         "drawbox=x=5:y=5:w=80:h=8:c=red:t=fill,"
                         "drawbox=x=555:y=5:w=80:h=8:c=green:t=fill"
                     )
+                    seg_a_lbl = seg_b_lbl = bars
                     self.after(0, lambda: self._log("  Note: drawtext not available (Red=Original, Green=Deinterlaced)"))
 
-                # Single 20-second output — labels stay the same throughout
+                # Probe the enhanced clip's duration so short clips still get
+                # both halves (e.g. a 12 s tape → 6 s normal + 6 s zoomed).
+                try:
+                    _p = run_hidden([FFPROBE_PATH, '-v', 'error', '-show_entries',
+                                     'format=duration', '-of', 'csv=p=0',
+                                     str(output_path)], timeout=30)
+                    _dur = float(_p.stdout.strip())
+                except Exception:
+                    _dur = 20.0
+                t_mid = min(10.0, _dur / 2)
+                t_end = min(20.0, _dur)
+
+                # 20-second comparison in two halves:
+                #   0–10 s  side-by-side at normal size
+                #  10–20 s  the same side-by-side at 300% (center third, 3×)
+                # setsar=1 after each hstack: the zoom path changes the SAR and
+                # concat refuses to join segments whose SARs differ.
+                filter_comp = (
+                    "[0:v]split=2[orig_a][orig_b];"
+                    "[1:v]split=2[enh_a][enh_b];"
+                    # Segment A — normal view
+                    f"[orig_a]trim=0:{t_mid:.2f},setpts=PTS-STARTPTS,{par_scale}[oA];"
+                    f"[enh_a]trim=0:{t_mid:.2f},setpts=PTS-STARTPTS,scale=640:480[eA];"
+                    "[oA]crop=320:480:0:0[lA];"
+                    "[eA]crop=320:480:320:0[rA];"
+                    "[lA][rA]hstack=inputs=2,setsar=1[sA];"
+                    f"[sA]{seg_a_lbl}[segA];"
+                    # Segment B — 300% zoom on the center of the frame
+                    f"[orig_b]trim={t_mid:.2f}:{t_end:.2f},setpts=PTS-STARTPTS,{par_scale},{zoom}[oB];"
+                    f"[enh_b]trim={t_mid:.2f}:{t_end:.2f},setpts=PTS-STARTPTS,scale=640:480,{zoom}[eB];"
+                    "[oB]crop=320:480:0:0[lB];"
+                    "[eB]crop=320:480:320:0[rB];"
+                    "[lB][rB]hstack=inputs=2,setsar=1[sB];"
+                    f"[sB]{seg_b_lbl}[segB];"
+                    "[segA][segB]concat=n=2:v=1:a=0"
+                )
                 cmd_comp = [
                     FFMPEG_PATH,
                     '-i', input_path,
@@ -8146,7 +9025,8 @@ class RestorationWizard(BaseWindow):
                     self.after(0, lambda: self._update_status("Comparison created!"))
                     self.after(0, lambda: messagebox.showinfo("Comparison Created",
                         f"20-second comparison saved:\n{comparison_path}\n\n"
-                        f"Left: ORIGINAL  |  Right: DEINTERLACED"))
+                        f"Left: Original  |  Right: Deinterlaced\n"
+                        f"0–10 s: normal view  ·  10–20 s: 300% zoom"))
                 else:
                     self.after(0, lambda: self._log(f"❌ Comparison failed: {result.stderr[:300]}"))
                     self.after(0, lambda: self._update_status("Comparison failed"))
