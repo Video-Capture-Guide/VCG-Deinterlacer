@@ -16,11 +16,32 @@ echo Deleting dist\ folder entirely...
 REM ── Wipe entire dist folder (catches any version name) ────────
 rmdir /s /q "dist" 2>nul
 
+echo Deleting _deps\ folder entirely...
+
+REM ── Wipe _deps folder (downloaded VapourSynth/FFmpeg bundle) ──
+rmdir /s /q "_deps" 2>nul
+
+echo Deleting __pycache__\ folder...
+
+REM ── Wipe Python bytecode cache ────────────────────────────────
+rmdir /s /q "__pycache__" 2>nul
+
 echo Deleting Nuitka global cache in AppData...
 
 REM ── Nuitka global compilation cache ──────────────────────────
 rmdir /s /q "%LOCALAPPDATA%\Nuitka" 2>nul
-rmdir /s /q "%APPDATA%\Nuitka"      2>nul
+if exist "%LOCALAPPDATA%\Nuitka" (
+    echo   WARNING: %%LOCALAPPDATA%%\Nuitka could not be fully removed.
+) else (
+    echo   OK: %%LOCALAPPDATA%%\Nuitka removed ^(or was already absent^).
+)
+
+rmdir /s /q "%APPDATA%\Nuitka" 2>nul
+if exist "%APPDATA%\Nuitka" (
+    echo   WARNING: %%APPDATA%%\Nuitka could not be fully removed.
+) else (
+    echo   OK: %%APPDATA%%\Nuitka removed ^(or was already absent^).
+)
 
 echo Deleting VCG Deinterlacer onefile extraction caches...
 
@@ -35,6 +56,13 @@ rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.14.0" 2>nul
 rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.15.0" 2>nul
 rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.16.0" 2>nul
 rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.1.0.0"  2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.2.0.0"  2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.2.1.0"  2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.3.0.0"  2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.4.0.0"  2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.4.1.0"  2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.5.0.0"  2>nul
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.6.0.0"  2>nul
 
 echo.
 echo ============================================================

@@ -1,5 +1,5 @@
 # VCG Deinterlacer
-### Version 1.5.0 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
+### Version 1.6.0 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
 
@@ -7,7 +7,7 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 
 ## Download
 
-**[Download VCG_Deinterlacer.exe — 1.5.0](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
+**[Download VCG_Deinterlacer.exe — 1.6.0](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
 
 Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
 
@@ -23,6 +23,8 @@ Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launc
 - **Batch processing** — queue multiple files and process them overnight
 - **Multiple output formats** — ProRes HQ, H.264, FFV1 (lossless), and more
 - **PAR correction** — automatically converts non-square pixels to square for NTSC, PAL, and HDV sources
+- **16-bit pipeline** — the full processing chain (QTGMC, BM3D, dehalo, colour correction, levels) runs at 16-bit precision; fmtconv error-diffusion dithering converts to the output bit depth at the very end, eliminating banding in skies and fades
+- **Colorspace tagging** — auto-detects the correct matrix (BT.601 for SD, BT.709 for HD), tags VapourSynth frames and the output container, and uses the same matrix for all in-app video scopes so scope colors are accurate
 - **Temporal denoising** — BM3D (with KNLMeansCL/SMDegrain fallback) for noisy VHS footage
 - **Dehalo** — removes edge halos from VHS sharpening circuits and camcorder edge enhancement, with automatic halo analysis and a quantified halo score
 - **Upscaling** — optional upscale to presets with NNEDI3 (SD sources only)
@@ -74,7 +76,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ## Installation
 
-1. Download `VCG_Deinterlacer_1.5.0.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+1. Download `VCG_Deinterlacer_1.6.0.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
@@ -89,7 +91,7 @@ On all future launches the wizard opens directly with no setup step.
 1. Launch **VCG Deinterlacer** from the folder where you extracted it
 2. Click **START** on the welcome screen
 3. **Select File** — drag and drop or browse for your video file(s)
-4. **Source** — confirm format (NTSC/PAL), field order (TFF/BFF), and crop settings
+4. **Source** — confirm format (NTSC/PAL), field order (TFF/BFF), crop settings, and source color matrix (BT.601 auto-selected for SD; BT.709 for HD)
 5. **Y/C Delay** — correct horizontal chroma shift if present
 6. **Noise** — review the automatic noise analysis (noise score shown) and choose a denoising level
 7. **Dehalo** — review the automatic halo analysis (halo score shown) and choose a dehalo level
@@ -161,6 +163,20 @@ If motion looks jerky or stuttery after processing, try switching the field orde
 
 ## Technical Details
 
+### Processing Pipeline (v1.6.0)
+
+Every encode runs through a **16-bit VapourSynth pipeline**. The source is lifted to 16-bit integer at the very start (`fmtc.bitdepth`) and all operations — QTGMC, BM3D, FineDehalo, colour cast correction, levels — run natively at that depth with no mid-chain round-trips to 8-bit.
+
+At the end, **fmtconv error-diffusion dithering** (`fmtc.bitdepth`, dmode=3) converts back to the codec's native depth:
+- **ProRes HQ** → 10-bit (fills the container fully)
+- **H.264, FFV1, and all other formats** → 8-bit
+
+This eliminates the banding in skies, fades, and gradients that is common in tape captures processed through an 8-bit chain.
+
+All output files are tagged with the correct **colorspace metadata** (BT.601 for SD, BT.709 for HD) in both the VapourSynth frame properties and the FFmpeg container flags. The in-app video scopes use the same matrix, so scope colors match the actual video signal.
+
+### QTGMC Configuration
+
 VCG Deinterlacer uses a conservative QTGMC configuration designed to preserve the original analog character without over-processing:
 
 ```
@@ -200,6 +216,7 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
+| 1.6.0 | 2026-06-29 | 16-bit pipeline; fmtconv error-diffusion output dithering (auto, ProRes 10-bit); colorspace/matrix tagging (BT.601/BT.709 auto-select); correct scope colors; Source Color Matrix dropdown on Source Details page |
 | 1.5.0 | 2026-06-10 | Dehalo page with halo analysis; Watermark page + film grain; BM3D denoising; RGB Parade; quantified analysis scores; sampling notes; reworked comparison video (10 s + 10 s at 300%) |
 | 1.4.1 | 2026-06-07 | .MOD file support; 16:9 widescreen PAR fix; crop page recommendation |
 | Beta-02b | 2026-04-05 | Fix RGB source support; faster launch via persistent cache dir |
