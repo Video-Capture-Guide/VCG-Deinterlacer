@@ -55,8 +55,8 @@
 # ============================================================
 
 # Version constants
-VERSION = "1.6.0"
-BUILD_DATE = "2026-06-29"
+VERSION = "1.7.0"
+BUILD_DATE = "2026-07-04"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -821,6 +821,24 @@ def extract_preview_frame(filepath, frame_num=200):
             '-vframes', '1', '-pix_fmt', 'rgb24', tmp]
     result0 = run_hidden(cmd0, timeout=30)
     if result0.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 100:
+        return tmp
+    return None
+
+
+def extract_preview_frame_at_time(filepath, seconds, tag=0):
+    """Extract a preview frame at *seconds* using FFmpeg fast seek (-ss before -i).
+
+    Fast seek lands on the nearest keyframe then decodes forward, so it stays
+    responsive even when scrubbing hours-long captures.  Returns the path to a
+    temp PNG, or None on failure.  *tag* makes the temp filename unique so
+    overlapping scrub requests never read a half-written file.
+    """
+    tmp = os.path.join(tempfile.gettempdir(),
+                       f'vcg_trimprev_{os.getpid()}_{tag}.png')
+    cmd = [FFMPEG_PATH, '-y', '-ss', f'{max(0.0, seconds):.3f}', '-i', filepath,
+           '-vframes', '1', '-pix_fmt', 'rgb24', tmp]
+    result = run_hidden(cmd, timeout=30)
+    if result.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 100:
         return tmp
     return None
 
@@ -1949,7 +1967,26 @@ def generate_vpy_script(config):
     lines.append('if clip is None:')
     lines.append(f'    raise RuntimeError("All source loaders failed for: {filepath}")')
     lines.append('')
-    
+
+    # ── Trim to selected segments (Feature: Trim / Segment Export) ──────────
+    # Applied on SOURCE frames, before any processing, so cut material is
+    # never deinterlaced/filtered (saves time) and audio (trimmed separately
+    # with matching timestamps in _process_single_file) stays in sync.
+    trim_ranges = config.get('trim_ranges') or []
+    if trim_ranges:
+        lines.append('# Trim to selected segments (frame-accurate, source frames)')
+        lines.append('# Frame numbers are clamped to the actual clip length in case the')
+        lines.append('# container duration over-reported the frame count.')
+        lines.append('def _vcg_trim(c, a, b):')
+        lines.append('    b = min(b, c.num_frames - 1)')
+        lines.append('    a = max(0, min(a, b))')
+        lines.append('    return core.std.Trim(c, first=a, last=b)')
+        lines.append('_vcg_src = clip')
+        splice = ' + '.join(f'_vcg_trim(_vcg_src, {int(s)}, {int(e)})'
+                            for s, e in trim_ranges)
+        lines.append(f'clip = {splice}')
+        lines.append('')
+
     # Convert to YUV422 if needed (QTGMC requires YUV; RGB needs matrix specified)
     lines.append('# Convert to YUV422 if needed (DV 4:1:1 and RGB not supported by QTGMC directly)')
     lines.append('if clip.format.subsampling_w == 2 and clip.format.subsampling_h == 0:')
@@ -2171,20 +2208,6 @@ def generate_vpy_script(config):
         lines.append('    pass  # dehalo prerequisites unavailable — skipping')
         lines.append('')
 
-    # ── Film grain overlay (Fun Extras) ──────────────────────────────────────
-    # Runs after denoising, before color/levels correction.  Skipped silently
-    # if the AddGrain plugin is not present in this _deps set.
-    grain_strength = float(config.get('grain_strength', 0) or 0)
-    if grain_strength > 0:
-        # grain.Add var is in 8-bit units; scale ×256 for 16-bit pipeline
-        grain_16 = grain_strength * 256
-        lines.append(f'# Film grain overlay (strength {grain_strength:g}, var={grain_16:.0f} for 16-bit)')
-        lines.append('try:')
-        lines.append(f'    clip = core.grain.Add(clip, var={grain_16:.1f}, uvar=0)')
-        lines.append('except AttributeError:')
-        lines.append('    pass  # grain plugin not available — skipping')
-        lines.append('')
-
     # ── Legacy chroma-shift flag (kept for back-compat) ──────────────────────
     if config.get('chroma_shift', False):
         lines.append('# Chroma shift correction (legacy color-bleeding fix)')
@@ -2310,6 +2333,22 @@ def generate_vpy_script(config):
         lines.append('clip = core.std.Transpose(clip)')
         lines.append(f'# Resize to target {out_w}×{out_h}')
         lines.append(f'clip = core.resize.Spline36(clip, width={out_w}, height={out_h})')
+        lines.append('')
+
+    # ── Film grain overlay ────────────────────────────────────────────────────
+    # Added at final resolution (after any upscale) so the grain stays
+    # pixel-fine, and before dithering while the pipeline is still 16-bit.
+    # AddGrain normalises `var` to the clip's bit depth internally, so the
+    # slider value is passed through unscaled (var ≈ variance in 8-bit units;
+    # measured on 16-bit: var=1 → σ≈1.0, var=4 → σ≈2.0).  Skipped silently
+    # if the AddGrain plugin is not present in this _deps set.
+    grain_strength = float(config.get('grain_strength', 0) or 0)
+    if grain_strength > 0:
+        lines.append(f'# Film grain overlay (AddGrain, strength/var {grain_strength:g})')
+        lines.append('try:')
+        lines.append(f'    clip = core.grain.Add(clip, var={grain_strength:.1f}, uvar=0)')
+        lines.append('except AttributeError:')
+        lines.append('    pass  # grain plugin not available — skipping')
         lines.append('')
 
     # ── Colorspace / matrix tagging (Feature 2) ──────────────────────────────
@@ -2718,79 +2757,173 @@ class StepIndicator(tk.Frame):
                 label.config(fg=Colors.TEXT_DISABLED, font=('Segoe UI', 12))
 
 
-class BreadcrumbBar(tk.Frame):
-    """Horizontal breadcrumb strip that supports *grouped* crumbs.
+class SidebarNav(tk.Frame):
+    """Vertical wizard-navigation sidebar with grouped steps and sub-steps.
 
-    Each crumb may span several step indices (e.g. "Advanced" covers steps 3-6).
-    Pass `crumbs` as a list of (label, [step_indices]) tuples.
-    If omitted, each step from index 1 onwards gets its own crumb.
+    `groups` is a list of (label, [step_indices]) tuples covering the wizard's
+    step ids; a group spanning several steps expands to one row per sub-step
+    while the current step is inside it.  Steps the user has already reached
+    are clickable (reported via `on_navigate`); steps in `disabled` are hidden
+    entirely (e.g. Trim during batch jobs).  Group labels listed in
+    `optional_groups` get an "optional" tag and a skip hint.
 
-    Call set_step(index) to refresh the visual state.
+    Call set_state(current, visited, disabled) to refresh the visual state.
     """
 
-    PILL_D = 28      # pill diameter
-    LINE_W = 36      # connector line width
-    PAD    = 8       # horizontal padding around connector
+    WIDTH  = 218     # fixed sidebar width in px
+    PILL_D = 24      # group pill diameter
 
-    def __init__(self, parent, steps, crumbs=None, **kwargs):
-        super().__init__(parent, bg=Colors.BG_MAIN, **kwargs)
-        self.steps       = steps
-        self.crumbs      = crumbs or [(s, [i]) for i, s in enumerate(steps) if i > 0]
-        self.current_step = 0
+    def __init__(self, parent, steps, groups, on_navigate=None,
+                 optional_groups=(), **kwargs):
+        super().__init__(parent, bg=Colors.BG_SIDEBAR, width=self.WIDTH, **kwargs)
+        self.pack_propagate(False)
+        self.steps           = steps
+        self.groups          = groups
+        self.on_navigate     = on_navigate
+        self.optional_groups = set(optional_groups)
+        self.current_step    = 0
+        self.visited         = set()
+        self.disabled        = set()
 
-    def set_step(self, index):
-        self.current_step = index
+    def set_state(self, current_step, visited, disabled=()):
+        self.current_step = current_step
+        self.visited      = set(visited)
+        self.disabled     = set(disabled)
         self._redraw()
+
+    def _reachable(self, step):
+        """A step is clickable once the user has progressed at least that far."""
+        max_reached = max(self.visited) if self.visited else 0
+        return step not in self.disabled and 1 <= step <= max_reached
+
+    def _make_clickable(self, widgets, target):
+        def _go(_e):
+            if self.on_navigate:
+                self.on_navigate(target)
+        def _hover(bg):
+            def _h(_e):
+                for w in widgets:
+                    if w.winfo_exists():
+                        w.config(bg=bg)
+            return _h
+        for w in widgets:
+            w.config(cursor='hand2')
+            w.bind('<Button-1>', _go)
+            w.bind('<Enter>', _hover(Colors.BG_CARD))
+            w.bind('<Leave>', _hover(Colors.BG_SIDEBAR))
 
     def _redraw(self):
         for w in self.winfo_children():
             w.destroy()
 
-        container = tk.Frame(self, bg=Colors.BG_MAIN)
-        container.pack(anchor='center', pady=10)
+        tk.Label(self, text="WORKFLOW", font=('Segoe UI', 9, 'bold'),
+                 fg=Colors.TEXT_HINT, bg=Colors.BG_SIDEBAR
+                 ).pack(anchor='w', padx=20, pady=(20, 10))
 
-        for crumb_i, (label, step_indices) in enumerate(self.crumbs):
-            crumb_num  = crumb_i + 1
-            is_done    = all(s < self.current_step for s in step_indices)
-            is_active  = self.current_step in step_indices
-            is_future  = not is_done and not is_active
+        in_optional = False
+        for group_i, (label, step_indices) in enumerate(self.groups):
+            group_num = group_i + 1
+            is_active = self.current_step in step_indices
+            is_past   = all(s < self.current_step for s in step_indices)
+            was_seen  = any(s in self.visited for s in step_indices)
+            optional  = label in self.optional_groups
+            if is_active and optional:
+                in_optional = True
+
+            row = tk.Frame(self, bg=Colors.BG_SIDEBAR)
+            row.pack(fill='x', pady=1)
 
             # ── pill ───────────────────────────────────────────────────
-            c = tk.Canvas(container, width=self.PILL_D, height=self.PILL_D,
-                          bg=Colors.BG_MAIN, highlightthickness=0)
-            c.pack(side='left')
-            r = self.PILL_D // 2 - 2
-            cx = cy = self.PILL_D // 2
-
-            if is_done:
-                c.create_oval(2, 2, self.PILL_D-2, self.PILL_D-2,
-                              fill=Colors.SUCCESS, outline='')
-                c.create_text(cx, cy, text='✓',
-                              fill='white', font=('Segoe UI', 12, 'bold'))
-            elif is_active:
-                c.create_oval(2, 2, self.PILL_D-2, self.PILL_D-2,
-                              fill=Colors.ACCENT, outline='')
-                c.create_text(cx, cy, text=str(crumb_num),
-                              fill='black', font=('Segoe UI', 10, 'bold'))
+            d = self.PILL_D
+            pill = tk.Canvas(row, width=d + 2, height=d + 2,
+                             bg=Colors.BG_SIDEBAR, highlightthickness=0)
+            pill.pack(side='left', padx=(16, 8), pady=4)
+            cx = cy = (d + 2) // 2
+            if is_active:
+                pill.create_oval(2, 2, d, d, fill=Colors.ACCENT, outline='')
+                pill.create_text(cx, cy, text=str(group_num),
+                                 fill='black', font=('Segoe UI', 9, 'bold'))
+            elif is_past and was_seen:
+                pill.create_oval(2, 2, d, d, fill=Colors.SUCCESS, outline='')
+                pill.create_text(cx, cy, text='✓',
+                                 fill='white', font=('Segoe UI', 10, 'bold'))
+            elif is_past:
+                # Passed without visiting → skipped, defaults in effect
+                pill.create_oval(2, 2, d, d, outline=Colors.TEXT_DISABLED, width=2)
+                pill.create_text(cx, cy, text='–',
+                                 fill=Colors.TEXT_SECONDARY, font=('Segoe UI', 10))
             else:
-                c.create_oval(2, 2, self.PILL_D-2, self.PILL_D-2,
-                              outline=Colors.TEXT_DISABLED, width=2)
-                c.create_text(cx, cy, text=str(crumb_num),
-                              fill=Colors.TEXT_DISABLED, font=('Segoe UI', 10))
+                pill.create_oval(2, 2, d, d, outline=Colors.TEXT_DISABLED, width=2)
+                pill.create_text(cx, cy, text=str(group_num),
+                                 fill=Colors.TEXT_DISABLED, font=('Segoe UI', 9))
 
-            # ── label ──────────────────────────────────────────────────
-            lbl_color = (Colors.TEXT_PRIMARY if (is_done or is_active) else Colors.TEXT_DISABLED)
-            lbl_font  = (('Segoe UI', 10, 'bold') if is_active else ('Segoe UI', 10))
-            tk.Label(container, text=label, font=lbl_font,
-                     fg=lbl_color, bg=Colors.BG_MAIN).pack(side='left', padx=(5, 0))
+            # ── label + optional tag ───────────────────────────────────
+            lbl_color = (Colors.TEXT_PRIMARY if (is_active or is_past)
+                         else Colors.TEXT_DISABLED)
+            lbl_font  = ('Segoe UI', 11, 'bold') if is_active else ('Segoe UI', 11)
+            lbl = tk.Label(row, text=label, font=lbl_font,
+                           fg=lbl_color, bg=Colors.BG_SIDEBAR, anchor='w')
+            lbl.pack(side='left', fill='x', expand=True)
+            group_widgets = [row, pill, lbl]
+            if optional:
+                tag = tk.Label(row, text='optional', font=('Segoe UI', 8),
+                               fg=Colors.TEXT_HINT, bg=Colors.BG_SIDEBAR)
+                tag.pack(side='right', padx=(0, 14))
+                group_widgets.append(tag)
 
-            # ── connector (not after last crumb) ───────────────────────
-            if crumb_i < len(self.crumbs) - 1:
-                line_col = Colors.SUCCESS if is_done else Colors.TEXT_DISABLED
-                lc = tk.Canvas(container, width=self.LINE_W, height=2,
-                               bg=Colors.BG_MAIN, highlightthickness=0)
-                lc.pack(side='left', padx=(self.PAD, self.PAD))
-                lc.create_line(0, 1, self.LINE_W, 1, fill=line_col, width=2)
+            # Click → first reachable step in the group
+            target = next((s for s in step_indices if self._reachable(s)), None)
+            if target is not None and not is_active:
+                self._make_clickable(group_widgets, target)
+
+            visible_subs = [s for s in step_indices if s not in self.disabled]
+            if is_active and len(step_indices) > 1:
+                # ── expanded sub-steps ─────────────────────────────────
+                for s in visible_subs:
+                    self._sub_row(s)
+            elif optional and len(visible_subs) > 1:
+                # Collapsed summary so users know what the group contains
+                tk.Label(self, text=f"{len(visible_subs)} optional steps",
+                         font=('Segoe UI', 9), fg=Colors.TEXT_HINT,
+                         bg=Colors.BG_SIDEBAR).pack(anchor='w', padx=(50, 0))
+
+        if in_optional:
+            tk.Label(self,
+                     text="These steps are all optional.\n"
+                          "Use Next to move through them,\n"
+                          "or click a step to revisit it.",
+                     font=('Segoe UI', 9), fg=Colors.TEXT_HINT,
+                     bg=Colors.BG_SIDEBAR, justify='left'
+                     ).pack(side='bottom', anchor='w', padx=20, pady=16)
+
+    def _sub_row(self, step):
+        cur  = (step == self.current_step)
+        seen = step in self.visited
+        if cur:
+            icon, icon_fg = '▶', Colors.ACCENT
+        elif seen:
+            icon, icon_fg = '✓', Colors.SUCCESS
+        else:
+            icon, icon_fg = '○', Colors.TEXT_DISABLED
+
+        row = tk.Frame(self, bg=Colors.BG_SIDEBAR)
+        row.pack(fill='x')
+        # Accent bar marks the current sub-step
+        bar = tk.Frame(row, width=3,
+                       bg=(Colors.ACCENT if cur else Colors.BG_SIDEBAR))
+        bar.pack(side='left', fill='y')
+        ic = tk.Label(row, text=icon, font=('Segoe UI', 9), fg=icon_fg,
+                      bg=Colors.BG_SIDEBAR, width=2)
+        ic.pack(side='left', padx=(31, 2), pady=1)
+        name_fg = (Colors.TEXT_PRIMARY if cur
+                   else Colors.TEXT_SECONDARY if seen
+                   else Colors.TEXT_DISABLED)
+        name_font = ('Segoe UI', 10, 'bold') if cur else ('Segoe UI', 10)
+        lbl = tk.Label(row, text=self.steps[step], font=name_font,
+                       fg=name_fg, bg=Colors.BG_SIDEBAR, anchor='w')
+        lbl.pack(side='left', fill='x', expand=True)
+        if not cur and self._reachable(step):
+            self._make_clickable([row, ic, lbl], step)
 
 
 class ProgressBar(tk.Canvas):
@@ -3489,8 +3622,8 @@ class RestorationWizard(BaseWindow):
         
         self.title(f"VCG Deinterlacer {VERSION_STRING}")
         
-        # Window size
-        window_width = 950
+        # Window size (wide enough for the nav sidebar + content)
+        window_width = 1120
         window_height = 900
         
         # Center window on screen
@@ -3502,7 +3635,7 @@ class RestorationWizard(BaseWindow):
         
         self.configure(bg=Colors.BG_DARK)
         self.resizable(True, True)
-        self.minsize(820, 600)   # prevent layout from collapsing below a usable size
+        self.minsize(980, 600)   # prevent layout from collapsing below a usable size
         
         # Try to set dark title bar on Windows 11
         self._set_dark_titlebar()
@@ -3519,28 +3652,32 @@ class RestorationWizard(BaseWindow):
         
         # Steps
         self.steps = [
-            "Welcome",         # 0  — hidden from breadcrumb
-            "Select File",     # 1  → crumb 1
-            "Source",          # 2  → crumb 2
-            "Crop",            # 3  → crumb 2
-            "Y/C Delay",       # 4  → crumb 3 "Advanced" ①
-            "Noise",           # 5  → crumb 3 "Advanced" ②
-            "Dehalo",          # 6  → crumb 3 "Advanced" ③
-            "Upscale",         # 7  → crumb 3 "Advanced" ④
-            "Color Cast",      # 8  → crumb 3 "Advanced" ⑤
-            "Levels",          # 9  → crumb 3 "Advanced" ⑥
-            "Audio",           # 10 → crumb 3 "Advanced" ⑦
-            "Watermark",       # 11 → crumb 3 "Advanced" ⑧
-            "Finalize",        # 12 → crumb 4
+            "Welcome",         # 0  — hidden from sidebar
+            "Select File",     # 1  → group 1
+            "Source",          # 2  → group 2
+            "Crop",            # 3  → group 2
+            "Trim",            # 4  → group 3 "Advanced" ⓪ (single file only)
+            "Y/C Delay",       # 5  → group 3 "Advanced" ①
+            "Noise",           # 6  → group 3 "Advanced" ②
+            "Dehalo",          # 7  → group 3 "Advanced" ③
+            "Upscale",         # 8  → group 3 "Advanced" ④
+            "Color Cast",      # 9  → group 3 "Advanced" ⑤
+            "Levels",          # 10 → group 3 "Advanced" ⑥
+            "Audio",           # 11 → group 3 "Advanced" ⑦
+            "Watermark",       # 12 → group 3 "Advanced" ⑧
+            "Add Grain",       # 13 → group 3 "Advanced" ⑨
+            "Dithering",       # 14 → group 3 "Advanced" ⑩
+            "Finalize",        # 15 → group 4
         ]
-        # Breadcrumb display groups: each entry = (label, [step_indices])
-        self.crumbs = [
+        # Sidebar display groups: each entry = (label, [step_indices])
+        self.nav_groups = [
             ("Select File", [1]),
             ("Source",      [2, 3]),
-            ("Advanced",    [4, 5, 6, 7, 8, 9, 10, 11]),
-            ("Finalize",    [12]),
+            ("Advanced",    [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]),
+            ("Finalize",    [15]),
         ]
         self.current_step = 0
+        self.visited_steps = set()   # steps the user has actually seen
         
         # Temp image paths for cleanup
         self.temp_images = []
@@ -3837,16 +3974,17 @@ class RestorationWizard(BaseWindow):
         # Main container
         main_frame = tk.Frame(self, bg=Colors.BG_DARK)
         main_frame.pack(fill='both', expand=True)
-        
-        # Content area (full width — no sidebar)
+
+        # Wizard navigation sidebar — shown/hidden by _show_step
+        self.sidebar = SidebarNav(main_frame, self.steps, self.nav_groups,
+                                  on_navigate=self._jump_to_step,
+                                  optional_groups={'Advanced'})
+
+        # Content area
         self.content_frame = tk.Frame(main_frame, bg=Colors.BG_MAIN)
         self.content_frame.pack(side='right', fill='both', expand=True)
 
-        # Breadcrumb bar at the top of content_frame (hidden on welcome screen)
-        self.breadcrumb = BreadcrumbBar(self.content_frame, self.steps,
-                                        crumbs=self.crumbs)
-        # Will be shown/hidden by _show_step
-        
+
         # Navigation buttons — packed FIRST so they stay pinned to bottom
         nav_frame = tk.Frame(self.content_frame, bg=Colors.BG_MAIN)
         nav_frame.pack(side='bottom', fill='x', padx=30, pady=(0, 20))
@@ -3887,16 +4025,20 @@ class RestorationWizard(BaseWindow):
     
     def _show_step(self, step_index):
         self.current_step = step_index
+        self.visited_steps.add(step_index)
         self._clear_page()
 
-        # Breadcrumb bar — hide on Welcome screen, show and update on all others
+        # Sidebar — hide on Welcome screen, show and update on all others
         if step_index == 0:
-            self.breadcrumb.pack_forget()
+            self.sidebar.pack_forget()
         else:
-            if not self.breadcrumb.winfo_ismapped():
-                self.breadcrumb.pack(side='top', fill='x',
-                                     before=self._page_canvas)
-            self.breadcrumb.set_step(step_index)
+            if not self.sidebar.winfo_ismapped():
+                self.sidebar.pack(side='left', fill='y',
+                                  before=self.content_frame)
+            # Trim is single-file only — hide it from the sidebar for batches
+            disabled = ({4} if len(self.config_data.get('input_files', [])) > 1
+                        else set())
+            self.sidebar.set_state(step_index, self.visited_steps, disabled)
 
         # On the welcome page the START canvas button replaces the nav buttons;
         # re-show them for every other step.
@@ -3912,28 +4054,31 @@ class RestorationWizard(BaseWindow):
         # Update navigation buttons
         self.back_btn.set_disabled(step_index <= 1)
         # On the last advanced page, label the button to indicate Finalize is next
-        if step_index == 11:
+        if step_index == 14:
             self.next_btn.text = "Finalize →"
         else:
             self.next_btn.text = "Next →"
         self.next_btn.set_disabled(False)
         self.next_btn._draw()
 
-        # Show appropriate page (13-step navigation)
+        # Show appropriate page (16-step navigation)
         step_methods = [
             self._page_welcome,         # 0
             self._page_select_file,     # 1
             self._page_source_dispatch,  # 2  SD or HD routing
             self._page_crop_preset,     # 3  Crop Preset
-            self._page_yc_delay,        # 4  Advanced ① Y/C Delay
-            self._page_noise,           # 5  Advanced ②
-            self._page_dehalo,          # 6  Advanced ③ Dehalo
-            self._page_upscale,         # 7  Advanced ④ Upscale
-            self._page_color,           # 8  Advanced ⑤ Color Cast
-            self._page_levels,          # 9  Advanced ⑥
-            self._page_audio,           # 10 Advanced ⑦
-            self._page_watermark,       # 11 Advanced ⑧ Watermark / Extras
-            self._page_finalize,        # 12
+            self._page_trim,            # 4  Advanced ⓪ Trim / Segment Export
+            self._page_yc_delay,        # 5  Advanced ① Y/C Delay
+            self._page_noise,           # 6  Advanced ②
+            self._page_dehalo,          # 7  Advanced ③ Dehalo
+            self._page_upscale,         # 8  Advanced ④ Upscale
+            self._page_color,           # 9  Advanced ⑤ Color Cast
+            self._page_levels,          # 10 Advanced ⑥
+            self._page_audio,           # 11 Advanced ⑦
+            self._page_watermark,       # 12 Advanced ⑧ Watermark
+            self._page_grain,           # 13 Advanced ⑨ Add Film Grain
+            self._page_dither,          # 14 Advanced ⑩ Output Dithering
+            self._page_finalize,        # 15
         ]
 
         if step_index < len(step_methods):
@@ -3965,16 +4110,25 @@ class RestorationWizard(BaseWindow):
             self._ask_basic_or_advanced()
             return
 
+        # ── Step 4: Trim → validate segment selection before leaving ─────────
+        if self.current_step == 4 and not self._validate_trim():
+            return
+
         # ── Last step: nothing to do ──────────────────────────────────────────
         if self.current_step >= len(self.steps) - 1:
             return
 
-        self._show_step(self.current_step + 1)
+        next_step = self.current_step + 1
+        # Trim is a single-file feature — skip the page for multi-file batches
+        if next_step == 4 and len(self.config_data.get('input_files', [])) > 1:
+            next_step = 5
+        self._show_step(next_step)
 
     def _ask_basic_or_advanced(self):
         """After Crop, let the user choose to process now or configure advanced options."""
-        finalize_step = 12  # "Finalize" in the 13-step list
-        advanced_step = 4   # First advanced page ("Y/C Delay")
+        finalize_step = 15  # "Finalize" in the 16-step list
+        # First advanced page: Trim (single file) — skipped for batches
+        advanced_step = 4 if len(self.config_data.get('input_files', [])) <= 1 else 5
 
         dlg = tk.Toplevel(self)
         dlg.title("Ready to process?")
@@ -3994,8 +4148,8 @@ class RestorationWizard(BaseWindow):
                  font=('Segoe UI', 16, 'bold'), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
         tk.Label(f,
                  text="You can process now using just deinterlacing, or continue to configure "
-                      "optional enhancements (Y/C delay, noise removal, dehalo, upscale, "
-                      "color analysis, levels, audio, watermark).",
+                      "optional enhancements (trim, Y/C delay, noise removal, dehalo, upscale, "
+                      "color analysis, levels, audio, watermark, film grain, dithering).",
                  font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
                  wraplength=490, justify='left').pack(anchor='w', pady=(8, 20))
 
@@ -4034,7 +4188,7 @@ class RestorationWizard(BaseWindow):
         adv_btn = tk.Frame(btn_row, bg=Colors.BG_CARD, cursor='hand2')
         adv_btn.pack(fill='x', ipady=8)
         adv_lbl = tk.Label(adv_btn,
-                           text="⚙   Advanced Options  (Y/C delay, noise, dehalo, upscale, color, levels, audio, watermark)",
+                           text="⚙   Advanced Options",
                            font=('Segoe UI', 11), fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD, cursor='hand2')
         adv_lbl.pack()
         adv_btn.bind('<Button-1>', lambda e: go_advanced())
@@ -4095,7 +4249,20 @@ class RestorationWizard(BaseWindow):
 
     def _prev_step(self):
         if self.current_step > 0:
-            self._show_step(self.current_step - 1)
+            prev_step = self.current_step - 1
+            # Trim is a single-file feature — skip the page for multi-file batches
+            if prev_step == 4 and len(self.config_data.get('input_files', [])) > 1:
+                prev_step = 3
+            self._show_step(prev_step)
+
+    def _jump_to_step(self, step_index):
+        """Navigate via a sidebar click to a step the user has already reached."""
+        if step_index == self.current_step:
+            return
+        # Same guard as Next: don't leave Trim with a selection that exports nothing
+        if self.current_step == 4 and not self._validate_trim():
+            return
+        self._show_step(step_index)
     
     # ==================== STEP PAGES ====================
     
@@ -4222,6 +4389,13 @@ class RestorationWizard(BaseWindow):
     
     def _on_files_changed(self, files):
         """Handle file list changes."""
+        # Trim segments are frame positions in a specific file — discard them
+        # whenever the selection changes (mode/output preferences are kept).
+        if files != self.config_data.get('input_files', []):
+            self.config_data.pop('trim_segments', None)
+            self.config_data.pop('trim_total_frames', None)
+            self.config_data.pop('trim_fps', None)
+
         self.config_data['input_files'] = files.copy()
 
         # For backwards compatibility, also set input_path to first file
@@ -4952,8 +5126,499 @@ class RestorationWizard(BaseWindow):
     # STEP 3 — Y/C DELAY CORRECTION  (Feature 1)
     # ══════════════════════════════════════════════════════════════════════════
 
+    # ==================== TRIM / SEGMENT EXPORT (Advanced ⓪) ====================
+
+    def _trim_fps_value(self):
+        """Exact source frame rate used for all trim frame↔time math.
+
+        Must match the fpsnum/fpsden forced at the decoder in
+        generate_vpy_script so audio cut times line up with video frames.
+        """
+        if self.config_data.get('format', 'ntsc') == 'pal':
+            return 25.0
+        return 30000.0 / 1001.0
+
+    def _trim_fmt_tc(self, frame):
+        """Format a source frame number as H:MM:SS.ff (ff = frame within second).
+
+        ff is defined as frame − round(whole_seconds × fps) so that
+        _trim_parse_tc is an exact inverse — with NTSC's 29.97 fps a
+        naive fractional-second calculation drifts by one frame.
+        """
+        fps = self._trim_fps_value()
+        secs = int(frame / fps)
+        ff = int(frame) - int(round(secs * fps))
+        h = secs // 3600
+        m = (secs % 3600) // 60
+        s = secs % 60
+        return f"{h}:{m:02d}:{s:02d}.{ff:02d}"
+
+    def _trim_parse_tc(self, text):
+        """Parse 'H:MM:SS.ff', 'MM:SS.ff', 'MM:SS' or plain seconds → frame number.
+
+        The part after '.' is a frame count within the second, not decimals.
+        Returns None on invalid input.
+        """
+        text = (text or '').strip()
+        if not text:
+            return None
+        fps = self._trim_fps_value()
+        try:
+            frames = 0
+            if '.' in text:
+                text, ff_part = text.rsplit('.', 1)
+                frames = int(ff_part) if ff_part else 0
+            parts = [int(p) for p in text.split(':')]
+            if not parts or len(parts) > 3:
+                return None
+            secs = 0
+            for p in parts:
+                if p < 0:
+                    return None
+                secs = secs * 60 + p
+            return int(round(secs * fps)) + frames
+        except (ValueError, TypeError):
+            return None
+
+    def _get_trim_plan(self):
+        """Compute the final export plan from the Trim page selections.
+
+        Returns None when trimming is not in effect (entire-video mode, batch,
+        no segments, or a selection equivalent to the whole file).  Otherwise::
+
+            {'ranges': [(first, last), ...],   # inclusive SOURCE frames to KEEP
+             'output': 'join' | 'separate'}
+
+        'ranges' can be empty when a cut selection removes everything —
+        _validate_trim blocks that before processing can start.
+        """
+        if self.config_data.get('trim_mode', 'full') == 'full':
+            return None
+        segs = self.config_data.get('trim_segments') or []
+        if len(self.config_data.get('input_files', [])) > 1 or not segs:
+            return None
+        total = int(self.config_data.get('trim_total_frames') or 0)
+
+        # Sort and merge overlapping / adjacent segments
+        segs = sorted((int(a), int(b)) for a, b in segs)
+        merged = []
+        for a, b in segs:
+            if merged and a <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+
+        if self.config_data.get('trim_mode', 'keep') == 'keep':
+            ranges = merged
+        else:
+            # Cut mode → keep the complement over [0, total-1]
+            ranges = []
+            pos = 0
+            for a, b in merged:
+                if a > pos:
+                    ranges.append((pos, a - 1))
+                pos = max(pos, b + 1)
+            if total and pos <= total - 1:
+                ranges.append((pos, total - 1))
+
+        # A single range spanning the whole file is the same as no trim
+        if total and ranges == [(0, total - 1)]:
+            return None
+        return {'ranges': ranges,
+                'output': self.config_data.get('trim_output', 'join')}
+
+    def _validate_trim(self):
+        """Block leaving the Trim page when the selection would export nothing."""
+        segs = self.config_data.get('trim_segments') or []
+        if not segs:
+            return True
+        plan = self._get_trim_plan()
+        if plan is not None and not plan['ranges']:
+            messagebox.showwarning(
+                "Nothing to Export",
+                "Your cut segments remove the entire video, so there is "
+                "nothing left to export.\n\n"
+                "Delete a segment, or switch to Keep mode.")
+            return False
+        return True
+
+    def _page_trim(self):
+        """Advanced ⓪ — Trim / Segment Export: pick parts to keep or cut (single file)."""
+        files = self.config_data.get('input_files', [])
+        if not files and 'input_path' in self.config_data:
+            files = [self.config_data['input_path']]
+
+        tk.Label(self.page_container, text="Trim / Segment Export",
+                 font=('Segoe UI', 22, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
+        tk.Label(self.page_container,
+                 text="Export the whole capture, export only part of it, or cut "
+                      "unwanted sections out of it.",
+                 font=('Segoe UI', 13),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
+                 wraplength=640, justify='left').pack(anchor='w', pady=(4, 12))
+
+        # Safety net — navigation skips this page for batches, but render a
+        # friendly notice if it is ever reached with more than one file.
+        if len(files) != 1:
+            card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=14)
+            card.pack(fill='x', pady=(8, 0))
+            tk.Label(card, text="🎬  Single-file feature",
+                     font=('Segoe UI', 12, 'bold'),
+                     fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(anchor='w')
+            tk.Label(card,
+                     text="Trimming is only available when exactly one file is selected. "
+                          "Every file in this batch will be processed in full.",
+                     font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                     wraplength=580, justify='left').pack(anchor='w', pady=(5, 0))
+            return
+
+        filepath = files[0]
+        self._trim_total = int(self.config_data.get('trim_total_frames') or 0)
+        self._trim_pending_start = None
+        self._trim_preview_gen = 0
+        self._trim_preview_after = None
+        self.config_data.setdefault('trim_segments', [])
+        self.config_data.setdefault('trim_mode', 'full')
+        self.config_data.setdefault('trim_output', 'join')
+
+        # ── Mode: entire video vs keep vs cut ───────────────────────────────
+        mode_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=4, pady=4)
+        mode_card.pack(fill='x')
+        self._trim_mode_var = tk.StringVar(value=self.config_data['trim_mode'])
+        ModernRadioButton(
+            mode_card, "Output entire video — no trimming",
+            self._trim_mode_var, 'full',
+            "The whole capture is exported from start to finish. Choose this "
+            "if you don't want to cut anything out."
+        ).pack(fill='x')
+        ttk.Separator(mode_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(
+            mode_card, "Keep mode — segments you mark are exported",
+            self._trim_mode_var, 'keep',
+            "Mark the good parts. Everything outside your segments is discarded."
+        ).pack(fill='x')
+        ttk.Separator(mode_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(
+            mode_card, "Cut mode — segments you mark are removed",
+            self._trim_mode_var, 'cut',
+            "Mark the bad parts (static, blank tape, private moments). "
+            "Everything outside your segments is exported."
+        ).pack(fill='x')
+
+        # All trim controls live in one container so "Output entire video"
+        # mode can show/hide them together.
+        trim_body = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
+        if self._trim_mode_var.get() != 'full':
+            trim_body.pack(fill='x')
+
+        # ── Preview + scrubber ──────────────────────────────────────────────
+        prev_card = tk.Frame(trim_body, bg=Colors.BG_CARD, padx=14, pady=12)
+        prev_card.pack(fill='x', pady=(10, 0))
+
+        prev_canvas = tk.Canvas(prev_card, width=480, height=280,
+                                bg=Colors.BG_DARK, highlightthickness=1,
+                                highlightbackground=Colors.BORDER)
+        prev_canvas.pack()
+        self._trim_preview_canvas = prev_canvas
+
+        status_lbl = tk.Label(prev_card, text="⏳ Reading video duration…",
+                              font=('Segoe UI', 10), fg=Colors.ACCENT,
+                              bg=Colors.BG_CARD)
+        status_lbl.pack(pady=(4, 0))
+
+        # Position slider (frames) — configured once the duration probe returns
+        self._trim_pos_var = tk.IntVar(value=0)
+        pos_slider = tk.Scale(prev_card, from_=0, to=1, orient='horizontal',
+                              variable=self._trim_pos_var, length=620,
+                              showvalue=False, state='disabled',
+                              bg=Colors.BG_CARD, fg=Colors.TEXT_PRIMARY,
+                              highlightthickness=0, troughcolor=Colors.BG_DARK,
+                              activebackground=Colors.ACCENT)
+        pos_slider.pack(fill='x', pady=(8, 0))
+
+        # Timeline bar — segments drawn green (keep) or red (cut) + playhead
+        timeline = tk.Canvas(prev_card, height=20, bg=Colors.BG_CARD,
+                             highlightthickness=0)
+        timeline.pack(fill='x', pady=(2, 4))
+        self._trim_timeline = timeline
+
+        # Current-position readout + timecode entry
+        tc_row = tk.Frame(prev_card, bg=Colors.BG_CARD)
+        tc_row.pack(fill='x', pady=(2, 0))
+        pos_lbl = tk.Label(tc_row, text="Position: 0:00:00.00",
+                           font=('Consolas', 12, 'bold'),
+                           fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD)
+        pos_lbl.pack(side='left')
+        tk.Label(tc_row, text="Go to:", font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(20, 4))
+        tc_entry = tk.Entry(tc_row, width=12, font=('Consolas', 11),
+                            bg=Colors.BG_DARK, fg=Colors.TEXT_PRIMARY,
+                            insertbackground=Colors.TEXT_PRIMARY,
+                            relief='flat', highlightthickness=1,
+                            highlightbackground=Colors.BORDER,
+                            highlightcolor=Colors.ACCENT)
+        tc_entry.pack(side='left', ipady=2)
+
+        def _goto_tc(*_):
+            frame = self._trim_parse_tc(tc_entry.get())
+            if frame is None or not self._trim_total:
+                return
+            self._trim_pos_var.set(max(0, min(frame, self._trim_total - 1)))
+        tc_entry.bind('<Return>', lambda e: (_goto_tc(), 'break')[1])
+        ModernButton(tc_row, "Go", _goto_tc, width=44, height=26).pack(side='left', padx=(6, 0))
+        tk.Label(tc_row, text="H:MM:SS.frames", font=('Segoe UI', 9),
+                 fg=Colors.TEXT_HINT, bg=Colors.BG_CARD).pack(side='left', padx=(8, 0))
+        dur_lbl = tk.Label(tc_row, text="", font=('Consolas', 11),
+                           fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD)
+        dur_lbl.pack(side='right')
+
+        # Step buttons — frame-accurate nudging
+        step_row = tk.Frame(prev_card, bg=Colors.BG_CARD)
+        step_row.pack(pady=(8, 0))
+
+        def _nudge(frames):
+            if not self._trim_total:
+                return
+            cur = self._trim_pos_var.get()
+            self._trim_pos_var.set(max(0, min(cur + frames, self._trim_total - 1)))
+
+        fps_i = int(round(self._trim_fps_value()))
+        for label, delta in [("−10s", -10 * fps_i), ("−1s", -fps_i), ("−1 frame", -1),
+                             ("+1 frame", 1), ("+1s", fps_i), ("+10s", 10 * fps_i)]:
+            ModernButton(step_row, label, lambda d=delta: _nudge(d),
+                         width=76, height=28).pack(side='left', padx=3)
+
+        # ── Mark segment ────────────────────────────────────────────────────
+        mark_row = tk.Frame(prev_card, bg=Colors.BG_CARD)
+        mark_row.pack(pady=(10, 0))
+
+        pending_lbl = tk.Label(prev_card, text="",
+                               font=('Segoe UI', 10),
+                               fg=Colors.WARNING, bg=Colors.BG_CARD)
+        pending_lbl.pack(pady=(4, 0))
+
+        def _set_start():
+            self._trim_pending_start = self._trim_pos_var.get()
+            pending_lbl.config(
+                text=f"Start set at {self._trim_fmt_tc(self._trim_pending_start)} — "
+                     f"scrub to the end point and click Set End.")
+
+        def _set_end():
+            if self._trim_pending_start is None:
+                messagebox.showinfo("Set Start First",
+                                    "Click 'Set Start' at the beginning of the "
+                                    "segment before setting its end.",
+                                    parent=self)
+                return
+            start = self._trim_pending_start
+            end = self._trim_pos_var.get()
+            if end <= start:
+                messagebox.showwarning("Invalid Segment",
+                                       "The end point must be after the start point.",
+                                       parent=self)
+                return
+            self.config_data['trim_segments'].append([start, end])
+            self._trim_pending_start = None
+            pending_lbl.config(text="")
+            _refresh_segments()
+            _redraw_timeline()
+
+        ModernButton(mark_row, "⇤ Set Start", _set_start, width=110, height=32).pack(side='left', padx=4)
+        ModernButton(mark_row, "Set End ⇥", _set_end, primary=True, width=110, height=32).pack(side='left', padx=4)
+
+        # ── Segment list ────────────────────────────────────────────────────
+        seg_card = tk.Frame(trim_body, bg=Colors.BG_CARD, padx=14, pady=12)
+        seg_card.pack(fill='x', pady=(10, 0))
+        seg_head = tk.Frame(seg_card, bg=Colors.BG_CARD)
+        seg_head.pack(fill='x')
+        seg_title = tk.Label(seg_head, text="Segments",
+                             font=('Segoe UI', 12, 'bold'),
+                             fg=Colors.ACCENT, bg=Colors.BG_CARD)
+        seg_title.pack(side='left')
+
+        def _clear_all():
+            if not self.config_data['trim_segments']:
+                return
+            if messagebox.askyesno("Clear All Segments",
+                                   "Remove all segments?", parent=self):
+                self.config_data['trim_segments'] = []
+                _refresh_segments()
+                _redraw_timeline()
+        ModernButton(seg_head, "Clear All", _clear_all, width=90, height=26).pack(side='right')
+
+        seg_list = tk.Frame(seg_card, bg=Colors.BG_CARD)
+        seg_list.pack(fill='x', pady=(6, 0))
+
+        def _refresh_segments():
+            if not seg_list.winfo_exists():
+                return
+            for w in seg_list.winfo_children():
+                w.destroy()
+            segs = self.config_data['trim_segments']
+            mode = self._trim_mode_var.get()
+            seg_title.config(
+                text=f"Segments to {'keep' if mode == 'keep' else 'cut'}  ({len(segs)})")
+            if not segs:
+                tk.Label(seg_list,
+                         text="No segments yet — the whole file will be exported.",
+                         font=('Segoe UI', 11), fg=Colors.TEXT_SECONDARY,
+                         bg=Colors.BG_CARD).pack(anchor='w', pady=(2, 2))
+                return
+            for i, (s, e) in enumerate(segs):
+                row = tk.Frame(seg_list, bg=Colors.BG_CARD)
+                row.pack(fill='x', pady=1)
+                icon = "✅" if mode == 'keep' else "✂"
+                dur = self._trim_fmt_tc(e - s + 1)
+                tk.Label(row,
+                         text=f"{icon}  Segment {i + 1}:  "
+                              f"{self._trim_fmt_tc(s)}  →  {self._trim_fmt_tc(e)}"
+                              f"   (length {dur})",
+                         font=('Consolas', 11), fg=Colors.TEXT_PRIMARY,
+                         bg=Colors.BG_CARD).pack(side='left')
+
+                def _remove(idx=i):
+                    del self.config_data['trim_segments'][idx]
+                    _refresh_segments()
+                    _redraw_timeline()
+                ModernButton(row, "✕", _remove, width=30, height=24).pack(side='right')
+
+        # ── Output: join vs separate files ──────────────────────────────────
+        out_card = tk.Frame(trim_body, bg=Colors.BG_CARD, padx=4, pady=4)
+        out_card.pack(fill='x', pady=(10, 0))
+        self._trim_output_var = tk.StringVar(value=self.config_data['trim_output'])
+        ModernRadioButton(
+            out_card, "Join into one file",
+            self._trim_output_var, 'join',
+            "The kept parts are spliced together into a single output video."
+        ).pack(fill='x')
+        ttk.Separator(out_card, orient='horizontal').pack(fill='x', padx=12)
+        ModernRadioButton(
+            out_card, "One file per segment",
+            self._trim_output_var, 'separate',
+            "Each kept part becomes its own output file (…_part01, _part02, …)."
+        ).pack(fill='x')
+
+        # ── Timeline drawing ────────────────────────────────────────────────
+        def _redraw_timeline(*_):
+            if not timeline.winfo_exists():
+                return
+            timeline.delete('all')
+            w = timeline.winfo_width()
+            if w < 10:
+                w = 620
+            timeline.create_rectangle(0, 5, w, 15, fill=Colors.BG_DARK,
+                                      outline=Colors.BORDER)
+            total = max(1, self._trim_total)
+            mode = self._trim_mode_var.get()
+            color = Colors.SUCCESS if mode == 'keep' else Colors.ERROR
+            for s, e in self.config_data['trim_segments']:
+                x1 = int(s / total * w)
+                x2 = max(x1 + 2, int((e + 1) / total * w))
+                timeline.create_rectangle(x1, 5, x2, 15, fill=color, outline='')
+            # Playhead
+            x = int(self._trim_pos_var.get() / total * w)
+            timeline.create_line(x, 0, x, 20, fill=Colors.ACCENT, width=2)
+        timeline.bind('<Configure>', _redraw_timeline)
+
+        # ── Preview extraction (debounced, background thread) ───────────────
+        def _show_preview(gen, img):
+            if gen != self._trim_preview_gen or not prev_canvas.winfo_exists():
+                return
+            if img is None:
+                status_lbl.config(text="⚠ Could not extract preview frame")
+                return
+            fw, fh = img.size
+            scale = min(480 / fw, 280 / fh)
+            thumb = img.resize((int(fw * scale), int(fh * scale)), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(thumb)
+            prev_canvas._vcg_photo = photo
+            prev_canvas.delete('all')
+            prev_canvas.create_image(240, 140, image=photo)
+            status_lbl.config(text="")
+
+        def _load_preview():
+            self._trim_preview_after = None
+            self._trim_preview_gen += 1
+            gen = self._trim_preview_gen
+            secs = self._trim_pos_var.get() / self._trim_fps_value()
+
+            def _worker():
+                img = None
+                path = extract_preview_frame_at_time(filepath, secs, tag=gen % 4)
+                if path and HAS_PIL:
+                    try:
+                        img = Image.open(path).convert('RGB')
+                        img.load()
+                    except Exception:
+                        img = None
+                try:
+                    self.after(0, lambda: _show_preview(gen, img))
+                except Exception:
+                    pass
+            threading.Thread(target=_worker, daemon=True).start()
+
+        def _on_pos_change(*_):
+            if not pos_lbl.winfo_exists():
+                return
+            pos_lbl.config(text=f"Position: {self._trim_fmt_tc(self._trim_pos_var.get())}")
+            _redraw_timeline()
+            if self._trim_preview_after is not None:
+                self.after_cancel(self._trim_preview_after)
+            self._trim_preview_after = self.after(250, _load_preview)
+        self._trim_pos_var.trace_add('write', _on_pos_change)
+
+        # ── Persist mode/output changes ─────────────────────────────────────
+        def _on_mode_change(*_):
+            mode = self._trim_mode_var.get()
+            self.config_data['trim_mode'] = mode
+            if trim_body.winfo_exists():
+                if mode == 'full':
+                    trim_body.pack_forget()
+                elif not trim_body.winfo_ismapped():
+                    trim_body.pack(fill='x')
+            if seg_list.winfo_exists():
+                _refresh_segments()
+                _redraw_timeline()
+        self._trim_mode_var.trace_add('write', _on_mode_change)
+        self._trim_output_var.trace_add(
+            'write',
+            lambda *_: self.config_data.update({'trim_output': self._trim_output_var.get()}))
+
+        # ── Duration probe (background) ─────────────────────────────────────
+        def _apply_probe(total_frames):
+            if not pos_slider.winfo_exists():
+                return
+            if total_frames <= 0:
+                status_lbl.config(text="⚠ Could not read video duration — trimming unavailable")
+                return
+            self._trim_total = total_frames
+            self.config_data['trim_total_frames'] = total_frames
+            self.config_data['trim_fps'] = self._trim_fps_value()
+            pos_slider.config(state='normal', to=total_frames - 1)
+            dur_lbl.config(text=f"Length: {self._trim_fmt_tc(total_frames)}  "
+                                f"({total_frames} frames)")
+            status_lbl.config(text="⏳ Loading preview…")
+            _redraw_timeline()
+            _load_preview()
+
+        def _probe():
+            info = get_video_info(filepath)
+            duration = info['duration'] if info else 0
+            total = int(round(duration * self._trim_fps_value()))
+            try:
+                self.after(0, lambda: _apply_probe(total))
+            except Exception:
+                pass
+
+        _refresh_segments()
+        if self._trim_total > 0:
+            _apply_probe(self._trim_total)
+        else:
+            threading.Thread(target=_probe, daemon=True).start()
+
     def _page_yc_delay(self):
-        """Step 4 (Advanced ①) — Y/C Delay (chroma horizontal shift) per file."""
+        """Step 5 (Advanced ①) — Y/C Delay (chroma horizontal shift) per file."""
         files = self.config_data.get('input_files', [])
         if not files and 'input_path' in self.config_data:
             files = [self.config_data['input_path']]
@@ -7516,9 +8181,6 @@ class RestorationWizard(BaseWindow):
         self.config_data.setdefault('wm_fontsize', 28)
         self.config_data.setdefault('wm_logo_path', '')
         self.config_data.setdefault('wm_logo_size', 0.10)
-        self.config_data.setdefault('grain_strength', 0.0)
-        self.config_data.setdefault('dither_enabled', True)
-        self.config_data.setdefault('dither_method', 'error_diffusion')
 
         self.wm_type_var = tk.StringVar(value=self.config_data['wm_type'])
 
@@ -7659,58 +8321,91 @@ class RestorationWizard(BaseWindow):
         tk.Label(row, text="%", font=('Segoe UI', 10),
                  fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(6, 0))
 
-        # ── ✨ Fun Extras ──────────────────────────────────────────────────────
-        extras_sep = ttk.Separator(self.page_container, orient='horizontal')
-        extras_sep.pack(fill='x', pady=(20, 0))
+        # ── Show/hide sub-option frames based on watermark type ──────────────
+        def _update_wm_subframes(*_):
+            t = self.wm_type_var.get()
+            self.config_data['wm_type'] = t
+            self._wm_text_frame.pack_forget()
+            self._wm_logo_frame.pack_forget()
+            if t == 'text':
+                self._wm_text_frame.pack(fill='x', pady=(10, 0))
+            elif t == 'logo':
+                self._wm_logo_frame.pack(fill='x', pady=(10, 0))
 
-        tk.Label(self.page_container, text="✨ Fun Extras",
-                 font=('Segoe UI', 14, 'bold'),
-                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(12, 0))
+        self.wm_type_var.trace_add('write', _update_wm_subframes)
+        _update_wm_subframes()
+
+    def _page_grain(self):
+        """Advanced ⑨ — Add Film Grain."""
+        tk.Label(self.page_container, text="Add Film Grain",
+                 font=('Segoe UI', 22, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
         tk.Label(self.page_container,
-                 text="These are optional effects that add personality to your restored video "
-                      "— not part of standard preservation workflow.",
-                 font=('Segoe UI', 10),
-                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
-                 wraplength=580, justify='left').pack(anchor='w', pady=(2, 8))
+                 text="Optionally overlay a fine layer of synthetic grain on the finished video.",
+                 font=('Segoe UI', 13),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(4, 14))
 
-        grain_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=12)
-        grain_card.pack(fill='x')
-        tk.Label(grain_card, text="Add subtle film grain",
+        self.config_data.setdefault('grain_strength', 0.0)
+
+        card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=14)
+        card.pack(fill='x')
+        tk.Label(card, text="Grain strength",
                  font=('Segoe UI', 12, 'bold'),
                  fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w')
-        tk.Label(grain_card,
-                 text="Adds subtle organic texture. Good for masking BM3D's smoothing artifacts.",
-                 font=('Segoe UI', 10),
-                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
-                 wraplength=560, justify='left').pack(anchor='w', pady=(2, 4))
 
-        grain_row = tk.Frame(grain_card, bg=Colors.BG_CARD)
-        grain_row.pack(fill='x')
-        tk.Label(grain_row, text="Grain strength", font=('Segoe UI', 11),
-                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD,
-                 width=14, anchor='w').pack(side='left')
+        grain_row = tk.Frame(card, bg=Colors.BG_CARD)
+        grain_row.pack(fill='x', pady=(6, 0))
         self._grain_var = tk.IntVar(value=int(round(self.config_data['grain_strength'])))
         self._grain_var.trace_add('write', lambda *_: self.config_data.update(
             {'grain_strength': float(self._grain_var.get())}))
-        dark_scale(grain_row, 0, 10, self._grain_var).pack(side='left')
-        tk.Label(grain_row, text="0 = off", font=('Segoe UI', 10),
-                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(6, 0))
+        tk.Scale(grain_row, from_=0, to=10, orient='horizontal',
+                 variable=self._grain_var, length=300, showvalue=True,
+                 bg=Colors.BG_CARD, fg=Colors.TEXT_PRIMARY,
+                 highlightthickness=0, troughcolor=Colors.BG_DARK,
+                 activebackground=Colors.ACCENT,
+                 font=('Segoe UI', 9)).pack(side='left')
+        tk.Label(grain_row, text="0 = off (default)", font=('Segoe UI', 10),
+                 fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD).pack(side='left', padx=(8, 0))
+        tk.Label(card,
+                 text="2–4 gives a subtle, film-like texture; higher values are a "
+                      "deliberate stylistic effect.",
+                 font=('Segoe UI', 10), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                 wraplength=560, justify='left').pack(anchor='w', pady=(4, 0))
 
-        # ── Advanced — Output Quality ──────────────────────────────────────────
-        ttk.Separator(self.page_container, orient='horizontal').pack(fill='x', pady=(20, 0))
+        info_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=14)
+        info_card.pack(fill='x', pady=(12, 0))
+        tk.Label(info_card, text="ℹ  Why add grain?",
+                 font=('Segoe UI', 12, 'bold'),
+                 fg=Colors.ACCENT, bg=Colors.BG_CARD).pack(anchor='w')
+        tk.Label(info_card,
+                 text="Grain is generated by the AddGrain filter (VapourSynth's "
+                      "grain.Add, a port of the classic AviSynth AddGrainC plugin).\n\n"
+                      "Denoising can leave skin and flat surfaces looking smooth and "
+                      "plasticky — a light layer of grain restores natural texture. "
+                      "It also helps prevent banding when the video is uploaded to "
+                      "YouTube: YouTube's heavy re-compression tends to turn smooth "
+                      "gradients (skies, fades, shadows) into visible stair-step "
+                      "bands, and grain breaks those gradients up so they survive "
+                      "the re-encode.",
+                 font=('Segoe UI', 10), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
+                 wraplength=560, justify='left').pack(anchor='w', pady=(5, 0))
 
-        tk.Label(self.page_container, text="Advanced — Output Quality",
-                 font=('Segoe UI', 14, 'bold'),
-                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(12, 0))
+    def _page_dither(self):
+        """Advanced ⑩ — Output Dithering."""
+        tk.Label(self.page_container, text="Output Dithering",
+                 font=('Segoe UI', 22, 'bold'),
+                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
         tk.Label(self.page_container,
-                 text="Dithering removes banding in skies and fades by spreading quantisation "
-                      "error across pixels. Error diffusion is highest quality. "
-                      "Most users should leave these at their defaults.",
-                 font=('Segoe UI', 10),
+                 text="Controls how the 16-bit processing pipeline is reduced to the "
+                      "output bit depth. Most users should leave this at the default.",
+                 font=('Segoe UI', 13),
                  fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
-                 wraplength=580, justify='left').pack(anchor='w', pady=(2, 8))
+                 wraplength=640, justify='left').pack(anchor='w', pady=(4, 14))
 
-        dither_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=12)
+        self.config_data.setdefault('dither_enabled', True)
+        self.config_data.setdefault('dither_method', 'error_diffusion')
+
+        dither_card = tk.Frame(self.page_container, bg=Colors.BG_CARD, padx=16, pady=14)
         dither_card.pack(fill='x')
 
         # Enable checkbox
@@ -7728,8 +8423,10 @@ class RestorationWizard(BaseWindow):
             selectcolor=Colors.BG_DARK, relief='flat', anchor='w')
         dither_chk.pack(anchor='w')
         tk.Label(dither_card,
-                 text="Converts the 16-bit internal pipeline to the output bit depth using "
-                      "high-quality dithering — prevents banding in gradients and fades.",
+                 text="Dithering (fmtconv's fmtc.bitdepth) spreads quantisation error "
+                      "across pixels when converting the 16-bit internal pipeline to "
+                      "the output bit depth — this prevents banding in gradients such "
+                      "as skies and fades. Error diffusion is highest quality.",
                  font=('Segoe UI', 10), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
                  wraplength=540, justify='left').pack(anchor='w', pady=(2, 8))
 
@@ -7761,20 +8458,6 @@ class RestorationWizard(BaseWindow):
 
         self._dither_method_var.trace_add('write', _on_dither_method)
 
-        # ── Show/hide sub-option frames based on watermark type ──────────────
-        def _update_wm_subframes(*_):
-            t = self.wm_type_var.get()
-            self.config_data['wm_type'] = t
-            self._wm_text_frame.pack_forget()
-            self._wm_logo_frame.pack_forget()
-            if t == 'text':
-                self._wm_text_frame.pack(fill='x', pady=(10, 0), before=extras_sep)
-            elif t == 'logo':
-                self._wm_logo_frame.pack(fill='x', pady=(10, 0), before=extras_sep)
-
-        self.wm_type_var.trace_add('write', _update_wm_subframes)
-        _update_wm_subframes()
-
     def _page_finalize(self):
         """Step 7 — Finalize (alias for _page_output_and_process)."""
         self._page_output_and_process()
@@ -7788,6 +8471,20 @@ class RestorationWizard(BaseWindow):
         tk.Label(self.page_container, text="Choose an output format, then start processing.",
                  font=('Segoe UI', 13),
                  fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(2, 18))
+
+        # ── Trim summary (from the Trim / Segment Export page) ────────────────
+        _trim_plan = self._get_trim_plan()
+        if _trim_plan and _trim_plan['ranges']:
+            _n = len(_trim_plan['ranges'])
+            if _trim_plan['output'] == 'separate' and _n > 1:
+                _trim_txt = f"✂  Trim active: {_n} segments will be exported as separate files."
+            elif _n > 1:
+                _trim_txt = f"✂  Trim active: {_n} segments will be joined into one output file."
+            else:
+                _trim_txt = "✂  Trim active: only the selected part of the video will be exported."
+            tk.Label(self.page_container, text=_trim_txt,
+                     font=('Segoe UI', 11, 'bold'),
+                     fg=Colors.WARNING, bg=Colors.BG_MAIN).pack(anchor='w', pady=(0, 14))
 
         # ── Output format selection ────────────────────────────────────────────
         # We'll hide this section when processing starts
@@ -8363,6 +9060,11 @@ class RestorationWizard(BaseWindow):
         total_files = len(self.files_to_process)
         self.completed_log_paths = []
 
+        # Trim / Segment Export plan (single-file feature; None for batches)
+        trim_plan = self._get_trim_plan() if total_files == 1 else None
+        if trim_plan and not trim_plan['ranges']:
+            trim_plan = None  # cut selection removed everything — export full file
+
         for i, filepath in enumerate(self.files_to_process):
             self.current_file_index = i
             self._update_overall_progress()
@@ -8374,14 +9076,36 @@ class RestorationWizard(BaseWindow):
             self._log(f"{'='*50}")
 
             try:
-                output_path, log_path = self._process_single_file(filepath)
-                self.completed_files.append((filepath, output_path))
-                if log_path:
-                    self.completed_log_paths.append(log_path)
-                    self._log(f"✓ Complete: {output_path}")
-                    self._log(f"  Log: {log_path}")
+                if trim_plan and trim_plan['output'] == 'separate' and len(trim_plan['ranges']) > 1:
+                    # One output file per kept segment
+                    n_segs = len(trim_plan['ranges'])
+                    self._log(f"Trim: exporting {n_segs} segments as separate files")
+                    for k, rng in enumerate(trim_plan['ranges'], start=1):
+                        self._log(f"\n--- Segment {k} of {n_segs}: "
+                                  f"frames {rng[0]}–{rng[1]} ---")
+                        output_path, log_path = self._process_single_file(
+                            filepath, trim_ranges=[rng],
+                            part_suffix=f"_part{k:02d}")
+                        self.completed_files.append((filepath, output_path))
+                        if log_path:
+                            self.completed_log_paths.append(log_path)
+                            self._log(f"✓ Complete: {output_path}")
+                            self._log(f"  Log: {log_path}")
+                        else:
+                            self._log(f"✓ Complete: {output_path}")
                 else:
-                    self._log(f"✓ Complete: {output_path}")
+                    trim_ranges = trim_plan['ranges'] if trim_plan else None
+                    if trim_ranges:
+                        self._log(f"Trim: exporting {len(trim_ranges)} segment(s), joined")
+                    output_path, log_path = self._process_single_file(
+                        filepath, trim_ranges=trim_ranges)
+                    self.completed_files.append((filepath, output_path))
+                    if log_path:
+                        self.completed_log_paths.append(log_path)
+                        self._log(f"✓ Complete: {output_path}")
+                        self._log(f"  Log: {log_path}")
+                    else:
+                        self._log(f"✓ Complete: {output_path}")
             except Exception as e:
                 self.failed_files.append((filepath, str(e)))
                 self._log(f"❌ Failed: {str(e)}")
@@ -8403,8 +9127,15 @@ class RestorationWizard(BaseWindow):
         # Show completion UI
         self.after(0, self._show_batch_complete)
     
-    def _process_single_file(self, filepath):
-        """Process a single file and return (output_path_str, log_path_or_None)."""
+    def _process_single_file(self, filepath, trim_ranges=None, part_suffix=''):
+        """Process a single file and return (output_path_str, log_path_or_None).
+
+        *trim_ranges* — optional list of (first, last) inclusive SOURCE frame
+        ranges to keep (from the Trim / Segment Export page).  Applied to the
+        video in the VapourSynth script and to the audio extraction with
+        matching timestamps.  *part_suffix* is appended to the output name
+        when exporting segments as separate files (e.g. "_part01").
+        """
         import traceback as _traceback
 
         self._log("Generating VapourSynth script...")
@@ -8415,8 +9146,13 @@ class RestorationWizard(BaseWindow):
         # Start from global config, then apply any per-file overrides.
         file_config = self.config_data.copy()
         file_config['input_path'] = filepath
+        file_config['trim_ranges'] = trim_ranges
         per_file_overrides = self.config_data.get('per_file_settings', {}).get(filepath, {})
         file_config.update(per_file_overrides)
+
+        if trim_ranges:
+            self._log(f"  Trim: keeping {len(trim_ranges)} frame range(s): " +
+                      ", ".join(f"{s}-{e}" for s, e in trim_ranges))
 
         # Generate script
         script = generate_vpy_script(file_config)
@@ -8428,7 +9164,7 @@ class RestorationWizard(BaseWindow):
         # Find next available number
         counter = 1
         while True:
-            suffix = f"_VCGD_{counter:02d}"
+            suffix = f"_VCGD_{counter:02d}{part_suffix}"
             output_path = input_path.parent / (input_path.stem + suffix + output_ext)
             script_path = input_path.parent / (input_path.stem + suffix + '.vpy')
             if not output_path.exists() and not script_path.exists():
@@ -8481,6 +9217,7 @@ class RestorationWizard(BaseWindow):
                     'output_format', 'par_correction', 'mix_audio', 'save_diagnostic_log',
                     'wm_type', 'wm_text', 'wm_position', 'wm_opacity', 'wm_fontsize',
                     'wm_logo_path', 'wm_logo_size', 'grain_strength',
+                    'trim_mode', 'trim_output', 'trim_ranges',
                 ]
                 for _k in _diag_keys:
                     if _k in file_config:
@@ -8537,34 +9274,48 @@ class RestorationWizard(BaseWindow):
         # Check if user wants to mix audio channels
         mix_audio = self.config_data.get('mix_audio', False)
 
+        # Audio cut times must match the video Trim ranges exactly, using the
+        # same frame rate that generate_vpy_script forces at the decoder.
+        _fps_num, _fps_den = (25, 1) if file_config.get('format') == 'pal' else (30000, 1001)
+
+        def _build_audio_cmd(mix):
+            """Audio extraction command; *mix* folds both channels into L+R.
+
+            When trim_ranges is set, the same segments kept in the video are
+            cut from the audio with atrim + concat (sample-accurate).
+            """
+            cmd = [FFMPEG_PATH, '-y', '-i', filepath, '-vn', '-sn']
+            pan = 'pan=stereo|c0=c0+c1|c1=c0+c1'  # mix L+R into both channels
+            if trim_ranges:
+                chains, labels = [], []
+                for _i, (_s, _e) in enumerate(trim_ranges):
+                    _st = _s * _fps_den / _fps_num
+                    _en = (_e + 1) * _fps_den / _fps_num
+                    chains.append(f'[0:a]atrim=start={_st:.6f}:end={_en:.6f},'
+                                  f'asetpts=PTS-STARTPTS[a{_i}]')
+                    labels.append(f'[a{_i}]')
+                fc = ';'.join(chains)
+                fc += f';{"".join(labels)}concat=n={len(trim_ranges)}:v=0:a=1'
+                if mix:
+                    fc += f'[acat];[acat]{pan}[aout]'
+                else:
+                    fc += '[aout]'
+                cmd.extend(['-filter_complex', fc, '-map', '[aout]'])
+            elif mix:
+                cmd.extend(['-af', pan])
+            if not mix:
+                cmd.extend(['-ac', '2'])   # Stereo output
+            cmd.extend(['-ar', '48000',    # 48kHz sample rate
+                        '-acodec', 'pcm_s16le',  # PCM 16-bit
+                        '-f', 'wav', temp_audio])
+            return cmd
+
+        audio_extract_cmd = _build_audio_cmd(mix_audio)
+        if trim_ranges:
+            self._log(f"  Trimming audio to match {len(trim_ranges)} video segment(s)")
         if mix_audio:
-            # Mix both channels together - useful when audio is only on one channel
-            # pan=stereo|c0=c0+c1|c1=c0+c1 mixes L+R into both channels
-            audio_extract_cmd = [
-                FFMPEG_PATH,
-                '-y',
-                '-i', filepath,
-                '-vn', '-sn',  # No video, no subtitles
-                '-af', 'pan=stereo|c0=c0+c1|c1=c0+c1',  # Mix both channels to both outputs
-                '-ar', '48000', # 48kHz sample rate
-                '-acodec', 'pcm_s16le',  # PCM 16-bit
-                '-f', 'wav',
-                temp_audio
-            ]
             self._log("  Mixing channels to ensure audio in both L+R")
         else:
-            # Preserve original audio channels
-            audio_extract_cmd = [
-                FFMPEG_PATH,
-                '-y',
-                '-i', filepath,
-                '-vn', '-sn',  # No video, no subtitles
-                '-ac', '2',  # Stereo output
-                '-ar', '48000', # 48kHz sample rate
-                '-acodec', 'pcm_s16le',  # PCM 16-bit
-                '-f', 'wav',
-                temp_audio
-            ]
             self._log("  Preserving original audio channels")
 
         if diag:
@@ -8573,22 +9324,12 @@ class RestorationWizard(BaseWindow):
 
         result = run_hidden(audio_extract_cmd, timeout=None)
 
-        # If pan filter failed, retry with simple conversion
+        # If pan filter failed, retry without mixing (trim cuts are kept)
         if result.returncode != 0:
             self._log("  Retrying audio extraction with simple stereo conversion...")
-            audio_extract_cmd = [
-                FFMPEG_PATH,
-                '-y',
-                '-i', filepath,
-                '-vn', '-sn',
-                '-ac', '2',
-                '-ar', '48000',
-                '-acodec', 'pcm_s16le',
-                '-f', 'wav',
-                temp_audio
-            ]
+            audio_extract_cmd = _build_audio_cmd(False)
             if diag:
-                diag.kv("audio-extract-retry", "pan filter failed, retrying with simple stereo")
+                diag.kv("audio-extract-retry", "first attempt failed, retrying without pan")
                 diag.cmd(audio_extract_cmd)
             result = run_hidden(audio_extract_cmd, timeout=None)
 
@@ -9102,8 +9843,11 @@ class RestorationWizard(BaseWindow):
                         font=('Segoe UI', 12),
                         fg=Colors.ERROR, bg=Colors.BG_CARD).pack(anchor='w')
         
-        # Comparison video option - only for single file processing
-        elif len(self.files_to_process) == 1 and self.completed_output_path:
+        # Comparison video option - only for single file processing.
+        # Hidden when trimming was used: the output timeline no longer lines
+        # up with the original, so a side-by-side would compare different scenes.
+        elif (len(self.files_to_process) == 1 and self.completed_output_path
+              and not self._get_trim_plan()):
             compare_frame = tk.Frame(self.page_container, bg=Colors.BG_MAIN)
             compare_frame.pack(fill='x', pady=(15, 0))
 

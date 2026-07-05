@@ -2,6 +2,154 @@
 
 ---
 
+## Version 1.7.0 — 2026-07-04
+
+### New: Sidebar Wizard Navigation
+
+The horizontal breadcrumb has been replaced by a persistent **navigation sidebar** on the
+left of the window, so you always know where you are in the wizard, what's done, and
+what's coming next.
+
+- The four phases — **Select File, Source, Advanced, Finalize** — are listed vertically
+  with numbered pills: purple = current, green ✓ = completed, dimmed – = skipped
+  (defaults in effect, e.g. after choosing *Process Now*).
+- While you're inside the **Advanced** section it expands to show all of its optional
+  sub-steps (Trim, Y/C Delay, Noise, Dehalo, Upscale, Color Cast, Levels, Audio,
+  Watermark, Add Grain, Dithering) with per-page status: ▶ current, ✓ visited,
+  ○ upcoming. When you're elsewhere it collapses to a one-line summary
+  (*"11 optional steps"*).
+- **Click any step you've already reached to jump straight back to it** — no more
+  pressing Back repeatedly. Forward movement stays linear through the Next button.
+- The Advanced group is tagged **optional**, with a hint explaining that every step in
+  it can be skipped.
+- Trim is hidden from the sidebar for multi-file batches (it is a single-file feature).
+- The default window is now 1120×900 (minimum 980×600) to make room for the sidebar.
+
+### New: Trim / Segment Export Page (Advanced ⓪ — single file)
+
+Export only part of a capture, or cut unwanted sections out of it, with frame accuracy —
+before any processing time is spent:
+
+- **Output entire video (default)** — new first option so users who don't want to trim
+  aren't confronted with trimming controls at all; the segment tools stay hidden unless
+  Keep or Cut mode is selected.
+- **Keep mode** — mark the good parts; everything else is discarded.
+  **Cut mode** — mark the bad parts (static, blank tape, private moments); everything
+  else is exported.
+- Frame preview with a scrubber, a color-coded segment timeline, direct timecode entry
+  (`H:MM:SS.frames`), and nudge buttons (±10 s / ±1 s / ±1 frame).
+- Mark any number of segments; overlapping segments are merged automatically.
+- Kept segments can be **joined into one output file** or exported as
+  **one file per segment** (`…_part01`, `…_part02`, …).
+- Audio cuts are computed from the exact source frame rate (30000/1001 NTSC, 25 PAL) so
+  sound stays in sync at every splice point.
+
+### Change: Watermark, Film Grain, and Output Dithering Are Now Separate Pages
+
+The former combined Watermark page (watermark + "Fun Extras" grain + dithering) has been
+split into three dedicated wizard pages, growing the wizard to 16 steps:
+
+- **Watermark** (Advanced ⑧) — text or logo overlay, unchanged.
+- **Add Film Grain** (Advanced ⑨) — grain-strength slider plus an explainer covering
+  which filter is used (**AddGrain**, VapourSynth's `grain.Add`, a port of AviSynth's
+  AddGrainC) and why grain helps: it keeps denoised footage from looking plasticky, and
+  it prevents banding after YouTube's re-compression by breaking up smooth gradients.
+- **Output Dithering** (Advanced ⑩) — the dithering checkbox and method dropdown moved
+  from the Finalize-adjacent "Output Quality" section to their own page, now naming the
+  filter used (fmtconv's `fmtc.bitdepth`).
+
+### Fix: Film Grain Was Far Too Strong and Too Coarse
+
+Selecting even strength 1–2 produced heavy, blotchy grain. Two bugs, both fixed:
+
+- **Strength was ~16× too high.** The code multiplied the slider value by 256 to
+  "convert 8-bit units to the 16-bit pipeline", but AddGrain already normalises `var`
+  to the clip's bit depth internally — measured on a 16-bit clip: `var=1` → σ≈1.0,
+  `var=4` → σ≈2.0 (8-bit equivalents), while the old `var=512` produced σ≈22.7.
+  The slider value is now passed through unscaled.
+- **Grain was applied before PAR correction and the NNEDI3 upscale**, so each grain
+  speck was enlarged by the upscale factor (2.25× at 1440×1080) and looked large and
+  smeared instead of pixel-fine. Grain is now added at the **final resolution**, after
+  any upscale and immediately before output dithering, while the pipeline is still
+  16-bit.
+
+Expected feel after the fix: 1–2 ≈ barely visible fine texture, 3–4 ≈ classic subtle
+film grain, 10 ≈ clearly visible (σ≈3).
+
+---
+
+## Version 1.6.0 — 2026-06-29
+
+### New: 16-bit Internal Pipeline
+
+The entire VapourSynth processing chain now runs at 16-bit integer precision. The source
+is lifted to 16-bit at the start of the script (`fmtc.bitdepth`) and all subsequent
+operations — QTGMC, BM3D, FineDehalo, colour cast, levels, film grain — work natively at
+that depth. No intermediate round-trips to 8-bit occur.
+
+Numeric constants in every generated Expr and Levels call have been scaled accordingly
+(chroma neutral 128 → 32768; luma legal black/white 16/235 → 4096/60160; BM3D sigma
+3 → 768 and 6 → 1536; FineDehalo edge thresholds scaled ×256; film grain var scaled ×256).
+
+### New: Output Dithering via fmtconv (Fully Automatic)
+
+The final step of every encode now dithers the 16-bit pipeline down to the codec's
+native depth using **fmtconv error-diffusion dithering** (`fmtc.bitdepth`, dmode=3 —
+verified against the installed mvsfunc.py). This eliminates banding in skies, fades,
+and gradients that is common in tape captures.
+
+- **ProRes HQ** outputs at **10-bit** (filling the container fully).
+- All other formats (H.264, FFV1, HuffYUV, etc.) output at **8-bit**.
+- A `try/except` fallback to `core.resize.Spline36` is generated so the same script
+  works if fmtconv is not available.
+- No new wizard step: dithering is on by default and requires no user action.
+
+**Optional power-user control:** a new *Advanced — Output Quality* section on the
+Finalize page exposes an "Output dithering (recommended)" checkbox and a dither method
+dropdown (*Error diffusion* default; *Ordered / Bayer* alternative). These are hidden
+from the default flow.
+
+### New: Colorspace / Matrix Tagging
+
+All output files are now tagged with the correct colorspace metadata, and the in-app
+video scopes (Vectorscope, RGB Histogram, RGB Parade) now convert colours using the
+correct matrix, so the scope display matches what the video actually looks like.
+
+#### Source Details page — Source Color Matrix dropdown
+
+A new **Source Color Matrix** control appears on the Source Details page (step 2), below
+the existing format and field-order controls:
+
+- **SD / VHS capture** → *BT.601 (recommended)* pre-selected automatically.
+- **HD / AVCHD / HDV** → *BT.709 (recommended)* pre-selected automatically.
+- Users can override, but the correct value is pre-selected and labeled in plain English.
+  No video-engineering knowledge required.
+
+#### VapourSynth script tagging
+
+The generated `.vpy` script now calls `core.std.SetFrameProps` to set `_Matrix`,
+`_Primaries`, `_Transfer`, and `_ColorRange=1` (limited) on the output clip before
+encoding, so the container metadata is set by VapourSynth rather than guessed by FFmpeg.
+
+VS matrix constants used: 1 = BT.709, 5 = BT.470BG (PAL BT.601), 6 = SMPTE 170M
+(NTSC BT.601).
+
+#### FFmpeg output tagging
+
+All output format commands (`prores_ks`, `libx264`, `ffv1`, `huffyuv`, `utvideo`,
+`lagarith`) now include `-colorspace`, `-color_primaries`, and `-color_trc` flags
+derived from the selected matrix and source format (PAL vs NTSC).
+
+#### Correct scope colors
+
+`generate_histogram_image`, `generate_vectorscope_image`, and `generate_rgb_histogram`
+now accept `color_matrix` and `video_format` parameters and pass the matching FFmpeg
+colorspace flags to the scope filter chain. Previously, YUV→RGB conversion inside
+FFmpeg used its default matrix (usually BT.709), causing incorrect hue on BT.601 SD
+sources in the Vectorscope and RGB Parade.
+
+---
+
 ## Version 1.5.0 — 2026-06-10
 
 The wizard is now 13 steps: two new Advanced pages (**Dehalo** and **Watermark**) were added,
