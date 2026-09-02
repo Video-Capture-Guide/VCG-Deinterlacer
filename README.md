@@ -1,5 +1,5 @@
 # VCG Deinterlacer
-### Version 1.7.0 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
+### Version 1.7.6 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
 
@@ -7,7 +7,7 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 
 ## Download
 
-**[Download VCG_Deinterlacer.exe — 1.7.0](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
+**[Download VCG_Deinterlacer.exe — 1.7.6](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
 
 Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
 
@@ -19,16 +19,20 @@ Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launc
 - **Automatic first-run setup** — downloads FFmpeg and VapourSynth automatically on first launch
 - **Automatic video analysis** — detects noise level, edge halos, color cast, color bleeding, and brightness levels, with quantified scores shown next to every recommendation and notes explaining where the analysis samples were taken from
 - **Guided wizard with sidebar navigation** — walks you through every setting with explanations; a navigation sidebar shows every step, what's done, and what's next, and lets you click any visited step to jump back to it
+- **Plain-language settings summary** — the final page recaps everything that will be applied (source, field order, deinterlacing method, crop, colour matrix, output, and any enhancements you enabled) so you can double-check before processing
+- **Field order detection with manual lock** — auto-detects TFF/BFF for single files via FFmpeg `idet`; a field order you set by hand is locked in and never overwritten by background detection
+- **Inverse Telecine (IVTC)** — detects 3:2 (NTSC) and 2:2 (PAL) film pulldown on DVD/MPEG-2 sources and can reconstruct the original progressive frames instead of deinterlacing
 - **Trim / segment export** — keep or cut frame-accurate segments before processing, with a preview scrubber, timecode entry, and the choice of joining kept parts into one file or exporting one file per segment
 - **AVCHD and HDV support** — automatically detects and processes interlaced HD camcorder footage (.mts, .m2ts, .m2t, .ts) with a dedicated HD wizard path
-- **Batch processing** — queue multiple files and process them overnight
+- **10-bit and non-standard source support** — 10-bit or unusual YUV/grayscale sources (e.g. DVD-rip MKVs) are auto-detected and converted to 8-bit at load time, with a one-line notice
+- **Batch processing** — queue multiple files and process them overnight (auto-detection is disabled for batches, since each file may differ — you set the field order manually)
 - **Multiple output formats** — ProRes HQ, H.264, FFV1 (lossless), and more
 - **PAR correction** — automatically converts non-square pixels to square for NTSC, PAL, and HDV sources
 - **16-bit pipeline** — the full processing chain (QTGMC, BM3D, dehalo, colour correction, levels) runs at 16-bit precision; fmtconv error-diffusion dithering converts to the output bit depth at the very end, eliminating banding in skies and fades
 - **Colorspace tagging** — auto-detects the correct matrix (BT.601 for SD, BT.709 for HD), tags VapourSynth frames and the output container, and uses the same matrix for all in-app video scopes so scope colors are accurate
 - **Temporal denoising** — BM3D (with KNLMeansCL/SMDegrain fallback) for noisy VHS footage
 - **Dehalo** — removes edge halos from VHS sharpening circuits and camcorder edge enhancement, with automatic halo analysis and a quantified halo score
-- **Upscaling** — optional upscale to presets with NNEDI3 (SD sources only)
+- **Upscaling** — optional upscale to HD presets with NNEDI3 (SD sources only); when the result is HD-sized, colours are converted BT.601 → BT.709 at full precision so the upload displays correctly on YouTube instead of looking dark and oversaturated
 - **Mono-to-stereo** — optional fix if your video has audio in only one channel
 - **Color correction** — auto-detects and corrects color casts and saturation issues
 - **Video scopes** — Vectorscope and RGB Histogram on the Color Analysis page; RGB Parade with frame scrubber on the Video Levels page
@@ -36,6 +40,7 @@ Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launc
 - **Film grain** — optional AddGrain overlay applied at the final resolution; keeps denoised footage from looking plasticky and prevents banding after YouTube's re-compression
 - **Comparison video** — 20-second side-by-side original vs. enhanced clip: 10 s normal view + 10 s at 300% zoom
 - **Drag and drop** — drop video files directly onto the app window, including MTS and AVCHD files
+- **Diagnostic log** — optional troubleshooting log saved alongside the output (VCG version, system info, ffprobe data, detected parameters, the generated VapourSynth script, the FFmpeg command, and full output) to email if you hit an error
 - **Portable** — no installer, no UAC prompt, no admin rights required
 
 ---
@@ -78,7 +83,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ## Installation
 
-1. Download `VCG_Deinterlacer_1.7.0.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+1. Download `VCG_Deinterlacer_1.7.6.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
@@ -93,7 +98,7 @@ On all future launches the wizard opens directly with no setup step.
 1. Launch **VCG Deinterlacer** from the folder where you extracted it
 2. Click **START** on the welcome screen
 3. **Select File** — drag and drop or browse for your video file(s)
-4. **Source** — confirm format (NTSC/PAL), field order (TFF/BFF), crop settings, and source color matrix (BT.601 auto-selected for SD; BT.709 for HD)
+4. **Source** — confirm format (NTSC/PAL), field order (TFF/BFF), crop settings, and source color matrix (BT.601 auto-selected for SD; BT.709 for HD). Field order and telecine are auto-detected for single files; for multi-file batches auto-detection is disabled (each file may differ) and you set the field order manually
 5. **Trim** — output the entire video (default), or keep/cut frame-accurate segments (single file only)
 6. **Y/C Delay** — correct horizontal chroma shift if present
 7. **Noise** — review the automatic noise analysis (noise score shown) and choose a denoising level
@@ -105,7 +110,7 @@ On all future launches the wizard opens directly with no setup step.
 13. **Watermark** — optionally add a text or logo watermark
 14. **Add Grain** — optionally add fine film grain (masks the "plasticky" look of denoised video and prevents banding on YouTube)
 15. **Dithering** — leave output dithering at its recommended default, or adjust the method
-16. **Finalize** — choose output format, review all settings, and click **Process**
+16. **Finalize** — choose output format, review the plain-language **Summary of settings** card, and click **Process**
 
 All Advanced steps (5–15) are optional — the sidebar marks them as such, and the **Process Now** shortcut after the Source step skips straight to Finalize with safe defaults.
 
@@ -170,9 +175,9 @@ If motion looks jerky or stuttery after processing, try switching the field orde
 
 ## Technical Details
 
-### Processing Pipeline (v1.7.0)
+### Processing Pipeline (v1.7.6)
 
-Every encode runs through a **16-bit VapourSynth pipeline**. The source is lifted to 16-bit integer at the very start (`fmtc.bitdepth`) and all operations — QTGMC, BM3D, FineDehalo, colour cast correction, levels — run natively at that depth with no mid-chain round-trips to 8-bit.
+Every encode runs through a **16-bit VapourSynth pipeline**. The source is lifted to 16-bit integer at the very start (`fmtc.bitdepth`) and all operations — QTGMC, BM3D, FineDehalo, colour cast correction, levels — run natively at that depth with no mid-chain round-trips to 8-bit. 10-bit or non-standard sources are converted to 8-bit YUV at load time before anything else runs.
 
 Optional **film grain** (AddGrain) is applied at the final resolution — after PAR correction and any NNEDI3 upscale — so the grain stays pixel-fine rather than being enlarged by the upscaler.
 
@@ -182,7 +187,11 @@ At the end, **fmtconv error-diffusion dithering** (`fmtc.bitdepth`, dmode=3) con
 
 This eliminates the banding in skies, fades, and gradients that is common in tape captures processed through an 8-bit chain.
 
-All output files are tagged with the correct **colorspace metadata** (BT.601 for SD, BT.709 for HD) in both the VapourSynth frame properties and the FFmpeg container flags. The in-app video scopes use the same matrix, so scope colors match the actual video signal.
+All output files are tagged with the correct **colorspace metadata** (BT.601 for SD, BT.709 for HD) in both the VapourSynth frame properties and the FFmpeg container flags — including a `setparams` filter so the primaries and transfer tags survive the y4m pipe. The in-app video scopes use the same matrix, so scope colors match the actual video signal.
+
+When an SD source is **upscaled to an HD size** (final height ≥ 720), a real **BT.601 → BT.709 pixel conversion** runs after the NNEDI3 upscale at full 16-bit precision, and the output is retagged BT.709. This is what HD platforms like YouTube expect, so the upload no longer looks dark and oversaturated. If you keep the original SD size, nothing changes — it stays BT.601.
+
+If a film **telecine** pattern is detected on a DVD/MPEG-2 source, the IVTC path uses `vivtc.VFM` field matching (plus `VDecimate` for NTSC 3:2 only — PAL 2:2 keeps all 25 frames) to reconstruct the original progressive frames instead of running QTGMC.
 
 ### QTGMC Configuration
 
@@ -225,6 +234,12 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
+| 1.7.6 | 2026-09-01 | Manual field order now locks in and is never overwritten by background auto-detection; auto-detection of field order and telecine disabled for multi-file batches (with an on-screen note), so batch badges no longer hang on "Detecting…"; new plain-language settings summary on the Output & Process page |
+| 1.7.5 | 2026-08-30 | Upscaled SD video now gets a real BT.601 → BT.709 pixel conversion when the result is HD-sized, so colours are correct on YouTube |
+| 1.7.4 | 2026-08-02 | Choose your own preview frame on the Y/C Delay page; live film-grain preview with 1×/2×/4× zoom; wider, more visible scrollbar; diagnostic log text points to the support email |
+| 1.7.3 | 2026-07-08 | Fixed a crash when applying full overscan / manual top-bottom crop to 4:2:0 sources (DVD / MPEG-2 rips) — the vertical crop now runs after deinterlacing |
+| 1.7.2 | 2026-07-07 | Fixed PAL encodes failing at the FFmpeg stage (invalid `color_trc`); output files now carry correct primaries/transfer tags (all formats); fixed a false "reverse telecine" prompt on interlaced PAL; PAL IVTC no longer drops every 5th frame |
+| 1.7.1 | 2026-07-06 | 10-bit and non-standard sources auto-converted to 8-bit at load time; Inverse Telecine fixed to work with the 16-bit pipeline (field-match on an 8-bit copy via VFM `clip2`) |
 | 1.7.0 | 2026-07-04 | Sidebar wizard navigation with clickable visited steps; Trim / Segment Export page (keep or cut segments, join or split output); Watermark, Add Grain, and Output Dithering split into separate pages; film grain fixed — correct strength (16× too strong before) and applied at final resolution |
 | 1.6.0 | 2026-06-29 | 16-bit pipeline; fmtconv error-diffusion output dithering (auto, ProRes 10-bit); colorspace/matrix tagging (BT.601/BT.709 auto-select); correct scope colors; Source Color Matrix dropdown on Source Details page |
 | 1.5.0 | 2026-06-10 | Dehalo page with halo analysis; Watermark page + film grain; BM3D denoising; RGB Parade; quantified analysis scores; sampling notes; reworked comparison video (10 s + 10 s at 300%) |
