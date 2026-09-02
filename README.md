@@ -26,7 +26,7 @@ Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launc
 - **AVCHD and HDV support** — automatically detects and processes interlaced HD camcorder footage (.mts, .m2ts, .m2t, .ts) with a dedicated HD wizard path
 - **10-bit and non-standard source support** — 10-bit or unusual YUV/grayscale sources (e.g. DVD-rip MKVs) are auto-detected and converted to 8-bit at load time, with a one-line notice
 - **Batch processing** — queue multiple files and process them overnight (auto-detection is disabled for batches, since each file may differ — you set the field order manually)
-- **Multiple output formats** — ProRes HQ, H.264, FFV1 (lossless), and more
+- **Multiple output formats** — ProRes HQ, H.264, FFV1 (lossless)
 - **PAR correction** — automatically converts non-square pixels to square for NTSC, PAL, and HDV sources
 - **16-bit pipeline** — the full processing chain (QTGMC, BM3D, dehalo, colour correction, levels) runs at 16-bit precision; fmtconv error-diffusion dithering converts to the output bit depth at the very end, eliminating banding in skies and fades
 - **Colorspace tagging** — auto-detects the correct matrix (BT.601 for SD, BT.709 for HD), tags VapourSynth frames and the output container, and uses the same matrix for all in-app video scopes so scope colors are accurate
