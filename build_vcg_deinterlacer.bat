@@ -191,7 +191,6 @@ python -m nuitka ^
     --windows-console-mode=force ^
     --enable-plugin=tk-inter ^
     --include-package=tkinterdnd2 ^
-    --nofollow-import-to=urllib ^
     %PIL_MODULES% ^
     %TKDND_OPTION% ^
     %ICON_OPTION% ^
