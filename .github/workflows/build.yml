@@ -1,0 +1,33 @@
+name: Build VCG Deinterlacer
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+        shell: cmd
+
+      - name: Build EXE with Nuitka
+        run: build_vcg_deinterlacer.bat < nul
+        shell: cmd
+
+      - name: Upload the built EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: VCG_Deinterlacer
+          path: dist/**
