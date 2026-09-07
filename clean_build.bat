@@ -46,23 +46,16 @@ if exist "%APPDATA%\Nuitka" (
 echo Deleting VCG Deinterlacer onefile extraction caches...
 
 REM ── Nuitka onefile extraction dirs (one per released version) ─
-REM    These are safe to delete — the EXE re-extracts on next run.
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.9.0"  2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.10.0" 2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.11.0" 2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.12.0" 2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.13.0" 2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.14.0" 2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.15.0" 2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.0.16.0" 2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.1.0.0"  2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.2.0.0"  2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.2.1.0"  2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.3.0.0"  2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.4.0.0"  2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.4.1.0"  2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.5.0.0"  2>nul
-rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer\1.6.0.0"  2>nul
+REM    The whole folder is safe to delete — it only holds per-version
+REM    extraction caches and the EXE re-extracts on next run.  Deleting
+REM    the parent covers every past and future version (1.0.9 … 1.7.2+)
+REM    without needing a new line here each release.
+rmdir /s /q "%LOCALAPPDATA%\VCG_Deinterlacer" 2>nul
+if exist "%LOCALAPPDATA%\VCG_Deinterlacer" (
+    echo   WARNING: %%LOCALAPPDATA%%\VCG_Deinterlacer could not be fully removed.
+) else (
+    echo   OK: %%LOCALAPPDATA%%\VCG_Deinterlacer removed ^(or was already absent^).
+)
 
 echo.
 echo ============================================================

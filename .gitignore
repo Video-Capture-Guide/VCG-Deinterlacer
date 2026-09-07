@@ -35,3 +35,27 @@ paths.json
 *.swo
 Thumbs.db
 Desktop.ini
+
+# Claude Code local settings (machine-specific)
+.claude/
+
+# Local test-scratch folders (large media, not for the repo)
+_hd709_test/
+_overscan_upscale_test/
+_pixfmt_test/
+
+# Loose sample media in repo root
+MOV0EE.MOD
+MOV0EE_VCGD_01.mp4
+
+# Superseded / backup source snapshots kept locally but intentionally NOT
+# tracked (repo history is current at v126). Remove a line here if you ever
+# decide to publish one of these older versions.
+vcg_deinterlacer_v104.py
+vcg_deinterlacer_v105.py
+vcg_deinterlacer_v106.py
+vcg_deinterlacer_v107.py
+vcg_deinterlacer_v116.py
+vcg_deinterlacer_v118.py
+vcg_deinterlacer_v124.py
+vcg_deinterlacer_v121.backup-pre-v15.py
