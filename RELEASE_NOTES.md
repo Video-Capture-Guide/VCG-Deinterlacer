@@ -2,6 +2,18 @@
 
 ---
 
+## Version 1.7.7 — 2026-09-07
+
+### Change: Version Number Now Shown on the Welcome Screen
+
+The app version is now displayed prominently — as **Version 1.7.7** in accent colour,
+directly beneath the title on the welcome/splash screen shown when the software loads.
+Previously the version appeared only in the window title bar and the sidebar, so it was
+not visible on the opening page. This makes it easy to confirm at a glance which build
+you are running.
+
+---
+
 ## Version 1.7.6 — 2026-09-01
 
 ### Fix: Manual Field Order Was Being Overwritten by Auto-Detection

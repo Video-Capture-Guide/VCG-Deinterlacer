@@ -50,7 +50,9 @@ jobs:
 
       - name: Build EXE with Nuitka
         shell: cmd
-        run: build_vcg_deinterlacer.bat vcg_deinterlacer_v126.py ${{ steps.ver.outputs.version }}
+        # Empty first arg -> the build script uses its own default source file,
+        # so each release only needs the default bumped in one place (the .bat).
+        run: build_vcg_deinterlacer.bat "" ${{ steps.ver.outputs.version }}
 
       - name: Upload unsigned EXE
         id: upload_unsigned
@@ -106,4 +108,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $files = Get-ChildItem release\*.exe | ForEach-Object { $_.FullName }
-          gh release create $env:GITHUB_REF_NAME @files --generate-notes --title "VCG Deinterlacer $env:GITHUB_REF_NAME"
+          $ver = '${{ steps.ver.outputs.version }}'
+
+          # Use the matching "## Version <ver>" section of RELEASE_NOTES.md as the
+          # release body. Fall back to GitHub's auto-generated notes if there is
+          # no section for this version.
+          $notesFile = $null
+          if (Test-Path RELEASE_NOTES.md) {
+            $lines = Get-Content RELEASE_NOTES.md
+            $start = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match ('^##\s+Version\s+' + [regex]::Escape($ver) + '\b')) { $start = $i; break }
+            }
+            if ($start -ge 0) {
+              $end = $lines.Count
+              for ($j = $start + 1; $j -lt $lines.Count; $j++) {
+                if ($lines[$j] -match '^##\s+Version\s') { $end = $j; break }
+              }
+              $section = ($lines[$start..($end - 1)] -join "`n")
+              $section = $section -replace '(?s)(\s*---\s*)+$', ''   # drop trailing separator
+              $section.TrimEnd() | Out-File release_notes_section.md -Encoding utf8
+              $notesFile = 'release_notes_section.md'
+              Write-Host "Using RELEASE_NOTES.md section for $ver as the release body."
+            }
+          }
+
+          if ($notesFile) {
+            gh release create $env:GITHUB_REF_NAME @files --notes-file $notesFile --title "VCG Deinterlacer $env:GITHUB_REF_NAME"
+          } else {
+            Write-Warning "No RELEASE_NOTES.md section for $ver - using auto-generated notes."
+            gh release create $env:GITHUB_REF_NAME @files --generate-notes --title "VCG Deinterlacer $env:GITHUB_REF_NAME"
+          }
