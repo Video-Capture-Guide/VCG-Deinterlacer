@@ -107,7 +107,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $files = Get-ChildItem release\*.exe | ForEach-Object { $_.FullName }
+          # Wrap in @() so a single exe is still an array -- otherwise `@files`
+          # splat-expands a lone string into individual characters.
+          $files = @(Get-ChildItem release\*.exe | ForEach-Object { $_.FullName })
           $ver = '${{ steps.ver.outputs.version }}'
 
           # Use the matching "## Version <ver>" section of RELEASE_NOTES.md as the
