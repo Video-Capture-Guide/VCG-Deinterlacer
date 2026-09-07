@@ -62,3 +62,6 @@ vcg_deinterlacer_v121.backup-pre-v15.py
 
 # Local download of CI artifacts for testing
 _ci_artifact_test/
+
+# Personal local reference (kept on Darryl's machine, not for the repo)
+HOW_TO_UPDATE.md
