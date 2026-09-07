@@ -74,6 +74,19 @@ import shutil
 import tempfile
 from pathlib import Path
 
+# ------------------------------------------------------------
+# Make console output encoding-proof. When stdout/stderr are redirected
+# (piped to a file or another process), Windows uses the cp1252 locale codec
+# with strict errors, so diagnostic prints containing box-drawing or other
+# non-Latin-1 glyphs raise UnicodeEncodeError and abort startup. Force UTF-8
+# with replacement so a stray glyph can never crash the app.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if _stream is not None:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 # ============================================================
 # Check for tkinter before importing
 # ============================================================
