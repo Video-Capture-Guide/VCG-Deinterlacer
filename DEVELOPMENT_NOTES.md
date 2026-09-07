@@ -665,6 +665,32 @@ git remote set-url origin "https://Video-Capture-Guide:<PAT>@github.com/Video-Ca
 
 ---
 
+## Problem 17 — CI Build on Python 3.14 Dies at Launch: tkdnd "compiled for Tcl 8.x"
+
+**Symptom:** An EXE built in GitHub Actions (works fine when built locally)
+crashes on launch on any machine with a startup error:
+```
+_tkinter.TclError: this extension is compiled for Tcl 8.x
+...
+RuntimeError: Unable to load tkdnd library.
+```
+The traceback runs through `tkinterdnd2\TkinterDnD.py` `_require()`.
+
+**Root cause:** `actions/setup-python`'s **3.13/3.14** builds ship **Tcl/Tk 9**,
+but `tkinterdnd2`'s bundled `tkdnd` native library is compiled for **Tcl 8**.
+At runtime the Tcl 9 interpreter refuses to load the Tcl 8 extension. Local
+builds work because the python.org 3.14 installer still ships Tcl/Tk **8.6** —
+so "same Python version" is *not* the same Tk. (Same family as Problems 7 and
+12: Python 3.13+ keeps breaking bundled native components. The app's supported
+ceiling is Python 3.12 / Tcl 8.6.)
+
+**Fix:** Pin the CI Python to **3.12** in `.github/workflows/build.yml`
+(`actions/setup-python` with `python-version: '3.12'`). 3.12 ships Tcl/Tk 8.6,
+which matches `tkdnd`. Do **not** bump CI to 3.13/3.14 until `tkinterdnd2`
+ships a Tcl-9 `tkdnd`.
+
+---
+
 ## Build & Release Checklist
 
 Before compiling a new release:

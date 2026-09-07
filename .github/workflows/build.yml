@@ -24,13 +24,14 @@ jobs:
       - name: Check out the repo
         uses: actions/checkout@v7
 
-      - name: Set up Python 3.14
+      - name: Set up Python 3.12
         uses: actions/setup-python@v6
         with:
-          # 3.14 matches the toolchain that produced the shipped 1.7.6 exe.
-          # (DEVELOPMENT_NOTES warns about 3.13's libffi-8.dll issue; the
-          # clean-machine artifact test is what validates the runtime.)
-          python-version: '3.14'
+          # MUST stay on 3.12. setup-python's 3.13/3.14 builds ship Tcl/Tk 9,
+          # but tkinterdnd2's bundled tkdnd is compiled for Tcl 8 -> the exe
+          # dies at launch with "this extension is compiled for Tcl 8.x /
+          # Unable to load tkdnd library". 3.12 ships Tcl/Tk 8.6, which matches.
+          python-version: '3.12'
 
       - name: Determine version
         id: ver
@@ -134,6 +135,12 @@ jobs:
               Write-Host "Using RELEASE_NOTES.md section for $ver as the release body."
             }
           }
+
+          # Idempotent: if a release already exists for this tag (e.g. re-tag
+          # after a fix), delete it first so 'create' does not fail. Keep the
+          # tag itself.
+          gh release delete $env:GITHUB_REF_NAME --yes 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Host "Deleted pre-existing release for $env:GITHUB_REF_NAME." }
 
           if ($notesFile) {
             gh release create $env:GITHUB_REF_NAME @files --notes-file $notesFile --title "VCG Deinterlacer $env:GITHUB_REF_NAME"
