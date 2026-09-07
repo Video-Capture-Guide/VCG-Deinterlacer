@@ -691,6 +691,60 @@ ships a Tcl-9 `tkdnd`.
 
 ---
 
+## Problem 18 — Excluding `urllib` Breaks the EXE on Python 3.12 (zipfile → pathlib → urllib)
+
+**Symptom:** EXE dies at launch with:
+```
+ImportError: Module 'urllib' was actively excluded from Nuitka compilation
+  ... instructed by user to not follow to using '--nofollow-import-to'.
+```
+Traceback: `<module>` → `zipfile/__init__.py` → `zipfile/_path/__init__.py` →
+`pathlib.py` → `urllib`.
+
+**Root cause:** `build_vcg_deinterlacer.bat` passed `--nofollow-import-to=urllib`
+to slim the build. On **Python 3.12**, `import zipfile` pulls in
+`zipfile._path` → `pathlib`, which imports `urllib` at module load — so the
+excluded module became required by the stdlib. (Local **3.14** builds didn't hit
+it: the 3.14 stdlib import graph differs — another "different Python, different
+stdlib" trap, cf. Problems 7, 12, 17.)
+
+**Fix:** Remove `--nofollow-import-to=urllib` from `build_vcg_deinterlacer.bat`.
+Do not re-exclude `urllib` while building on 3.12.
+
+---
+
+## Problem 19 — Startup Crash When stdout Is Redirected (cp1252 UnicodeEncodeError)
+
+**Symptom:** EXE runs fine on double-click but **crashes at launch when stdout
+is piped/redirected** (e.g. `app.exe > log.txt`, `| Tee-Object`), with:
+```
+File "vcg_deinterlacer_vNNN.py", line NNNN, in <module>
+File "encodings\cp1252.py", line 19, in encode
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 11-12
+```
+The failing line is a `[VCG Diag] ── ... ──` `print()` (box-drawing glyphs).
+Worse, this crash *masks other startup errors*, because the error handler's own
+print also fails to encode — so the real cause (e.g. Problem 18) is hidden.
+
+**Root cause:** With a real console, Python writes via `WriteConsoleW` (Unicode
+OK). When stdout/stderr are redirected, Python uses the **cp1252** locale codec
+with **strict** errors, so any non-Latin-1 glyph raises `UnicodeEncodeError` and
+aborts startup.
+
+**Fix:** Reconfigure the streams to UTF-8/replace at the top of the module
+(right after the imports), guarded so it can never itself raise:
+```python
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if _stream is not None:
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+```
+Now console output can never crash the app regardless of glyphs or redirection.
+
+---
+
 ## Build & Release Checklist
 
 Before compiling a new release:
