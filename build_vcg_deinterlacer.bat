@@ -84,10 +84,13 @@ for %%P in (
     )
 )
 
-REM Try pip show as fallback
-for /f "tokens=2 delims=: " %%L in ('pip show tkinterdnd2 2^>nul ^| findstr "Location"') do (
-    if exist "%%L\tkinterdnd2\tkdnd" (
-        set TKDND_PATH=%%L\tkinterdnd2\tkdnd
+REM Reliable fallback: ask Python where tkinterdnd2 installed its tkdnd dir.
+REM Works anywhere the package is importable (incl. GitHub's hosted tool cache,
+REM whose path the hardcoded list above never matches). Handles spaces in the
+REM path and avoids the drive-letter colon that broke the old 'pip show' parse.
+for /f "usebackq delims=" %%L in (`python -c "import os,tkinterdnd2;print(os.path.join(os.path.dirname(tkinterdnd2.__file__),'tkdnd'))" 2^>nul`) do (
+    if exist "%%L" (
+        set TKDND_PATH=%%L
         goto :found_tkdnd
     )
 )
