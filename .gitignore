@@ -59,3 +59,6 @@ vcg_deinterlacer_v116.py
 vcg_deinterlacer_v118.py
 vcg_deinterlacer_v124.py
 vcg_deinterlacer_v121.backup-pre-v15.py
+
+# Local download of CI artifacts for testing
+_ci_artifact_test/
