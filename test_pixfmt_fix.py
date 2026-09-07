@@ -30,7 +30,7 @@ def check(name, cond, detail=''):
 
 # ── Import the app module (safe: __main__ guard) and point it at real deps ──
 spec = importlib.util.spec_from_file_location(
-    'vcg', os.path.join(ROOT, 'vcg_deinterlacer_v122.py'))
+    'vcg', os.path.join(ROOT, 'vcg_deinterlacer_v127.py'))
 vcg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vcg)
 vcg.FFPROBE_PATH = FFPROBE
