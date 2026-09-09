@@ -2,6 +2,32 @@
 
 ---
 
+## Version 1.7.8 — 2026-09-09
+
+### Fix: A Failed Audio Mux No Longer Destroys Your Render
+
+A rare but catastrophic bug could delete a completed render and still report
+success. If the final audio-muxing pass ran out of disk space (or was otherwise
+killed) partway through, the app deleted the intact video and left only a
+truncated, unplayable file — while logging `Status: SUCCESS`.
+
+This release makes that pass data-safe:
+
+- **Never deletes the good video on a failed mux.** If muxing fails, the
+  truncated output is removed and the intact video-only render is restored to
+  the expected filename. The extracted audio (WAV) is kept so it can be muxed
+  manually, and an error dialog explains exactly what happened.
+- **Checks free disk space before muxing.** If the drive can't hold the second
+  copy (plus a 5% margin), the mux is skipped up front, leaving the intact
+  video-only file in place and telling you how many GB are free versus needed —
+  failing early with a good file instead of late with a destroyed one.
+- **Verifies the finished file before declaring success.** A quick `ffprobe`
+  integrity/duration check catches truncated files (e.g. a MOV with no `moov`
+  atom) and triggers the same safe recovery. The run is now correctly marked
+  **FAILED** in the batch and the diagnostic log instead of silently passing.
+
+---
+
 ## Version 1.7.7 — 2026-09-07
 
 ### Change: Version Number Now Shown on the Welcome Screen

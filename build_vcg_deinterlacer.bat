@@ -18,9 +18,9 @@ REM -- Arguments (CI passes these; local double-click uses the defaults) --
 REM    %1 = source .py filename         (default: current release source)
 REM    %2 = version string  e.g. 1.7.6  (default: current release version)
 set SOURCE=%~1
-if "%SOURCE%"=="" set SOURCE=vcg_deinterlacer_v127.py
+if "%SOURCE%"=="" set SOURCE=vcg_deinterlacer_v128.py
 set VERSION=%~2
-if "%VERSION%"=="" set VERSION=1.7.7
+if "%VERSION%"=="" set VERSION=1.7.8
 
 set OUTNAME=VCG_Deinterlacer_%VERSION%.exe
 

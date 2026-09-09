@@ -55,8 +55,8 @@
 # ============================================================
 
 # Version constants
-VERSION = "1.7.7"
-BUILD_DATE = "2026-09-07"
+VERSION = "1.7.8"
+BUILD_DATE = "2026-09-09"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -10528,10 +10528,123 @@ class RestorationWizard(BaseWindow):
         self._update_progress(0.9)
         self._update_status("Muxing audio...")
 
+        # ── Shared helpers for Step 3 (mux) and Step 4 (verification) ──────
+        # These make the failure paths below data-safe: a failed or truncated
+        # mux must NEVER leave the user with nothing.  See VCGD_mux_bugfix.
+        import tkinter.messagebox as _mb_mod
+
+        def _error_dialog(title, body, stderr_text=None):
+            """Surface an error in the same style as _show_vs_err()."""
+            def _show():
+                msg = body
+                if stderr_text:
+                    _tail = (stderr_text[-1200:]
+                             if len(stderr_text) > 1200 else stderr_text)
+                    msg = body + "\n\nffmpeg output (last lines):\n" + _tail
+                try:
+                    _mb_mod.showerror(
+                        title, msg,
+                        parent=self.winfo_toplevel() if self.winfo_exists() else None)
+                except Exception:
+                    pass
+            self.after(0, _show)
+
+        def _expected_output_duration():
+            """Approx duration (seconds) of the content expected in the output.
+
+            With Trim, it is the sum of the kept source ranges at the decode
+            frame rate (matches the audio atrim math above).  Otherwise it is
+            the source file duration.  Returns None if it cannot be determined.
+            """
+            if trim_ranges:
+                _total = 0.0
+                for _s, _e in trim_ranges:
+                    _total += (_e + 1 - _s) * _fps_den / _fps_num
+                return _total
+            try:
+                _pr = run_hidden([FFPROBE_PATH, '-v', 'error', '-show_entries',
+                                  'format=duration', '-of', 'default=nw=1:nk=1',
+                                  filepath])
+                return float((_pr.stdout or '').strip())
+            except Exception:
+                return None
+
+        def _verify_output(path, expected_dur):
+            """Fix 4: cheap integrity check.  A truncated MOV with no moov
+            atom fails ffprobe instantly.  Returns (ok: bool, detail: str)."""
+            try:
+                probe = run_hidden([FFPROBE_PATH, '-v', 'error', '-show_entries',
+                                    'format=duration', '-of',
+                                    'default=nw=1:nk=1', str(path)])
+            except Exception as _pe:
+                return (False, f"ffprobe could not run: {_pe}")
+            if probe.returncode != 0:
+                return (False, "ffprobe failed (likely truncated / missing moov "
+                        f"atom): {(probe.stderr or '').strip()[:400]}")
+            try:
+                out_dur = float((probe.stdout or '').strip())
+            except (ValueError, TypeError):
+                return (False, "ffprobe reported no duration — output is likely "
+                        f"truncated (raw: {(probe.stdout or '').strip()!r})")
+            if expected_dur and expected_dur > 0:
+                tol = max(expected_dur * 0.02, 0.5)
+                if abs(out_dur - expected_dur) > tol:
+                    return (False, f"duration {out_dur:.1f}s differs from expected "
+                            f"{expected_dur:.1f}s by more than {tol:.1f}s")
+            return (True, f"{out_dur:.1f}s")
+
+        _expected_dur = _expected_output_duration()
+
         # Step 3: Mux video with clean extracted audio
         if has_audio:
             temp_output = str(output_path) + '.temp' + output_ext
             os.rename(output_path, temp_output)
+
+            # ── Fix 2: Pre-flight disk-space check before the second pass ──
+            # The mux writes a whole second copy of the video.  If the drive
+            # cannot hold it, do NOT start — a mux that dies late is exactly
+            # what destroyed a 2.5-hour render.  Bail early, leaving the
+            # intact video-only file at the expected path and keeping the WAV.
+            _free = _needed = None
+            try:
+                _dest_dir = os.path.dirname(temp_output) or '.'
+                _free = shutil.disk_usage(_dest_dir).free
+                _needed = (os.path.getsize(temp_output)
+                           + (os.path.getsize(temp_audio)
+                              if os.path.exists(temp_audio) else 0))
+            except Exception as _de2:
+                self._log(f"  Warning: could not check free disk space: {_de2}")
+
+            if _free is not None and _free <= _needed * 1.05:
+                _free_gb = _free / (1024 ** 3)
+                _need_gb = (_needed * 1.05) / (1024 ** 3)
+                try:
+                    os.rename(temp_output, output_path)
+                except Exception:
+                    pass
+                self._log("  MUX SKIPPED — insufficient disk space. "
+                          f"Free {_free_gb:.1f} GB < needed {_need_gb:.1f} GB.")
+                self._log(f"  Video preserved WITHOUT audio: {output_path}")
+                self._log(f"  Audio WAV kept for manual mux: {temp_audio}")
+                if diag:
+                    diag.section("Step 3: Audio Mux")
+                    diag.kv("mux", "SKIPPED — insufficient disk space")
+                    diag.kv("disk_free_gb", f"{_free_gb:.2f}")
+                    diag.kv("disk_needed_gb", f"{_need_gb:.2f}")
+                    diag.kv("video_preserved", str(output_path))
+                    diag.kv("audio_wav_kept", temp_audio)
+                    diag.close(success=False)
+                _error_dialog(
+                    "Not Enough Disk Space to Mux Audio",
+                    "There is not enough free disk space to mux the audio.\n\n"
+                    f"Free: {_free_gb:.1f} GB\n"
+                    f"Needed (with 5% margin): {_need_gb:.1f} GB\n\n"
+                    "Your video was saved WITHOUT audio at:\n"
+                    f"{output_path}\n\n"
+                    "The extracted audio (WAV) was kept so you can free space "
+                    "and mux it manually:\n"
+                    f"{temp_audio}")
+                raise Exception("mux skipped: insufficient disk space")
 
             # Determine audio codec based on output format
             if output_ext == '.mp4':
@@ -10567,7 +10680,79 @@ class RestorationWizard(BaseWindow):
                         else f"FAILED (returncode={mux_result.returncode})")
                 diag.timing("mux end")
 
-            # Clean up temp files
+            # ── Fix 1: NEVER destroy the temp video when the mux fails ─────
+            # The old code deleted temp_output unconditionally, so a mux that
+            # was killed mid-write left a truncated output AND deleted the one
+            # good copy.  Instead: delete the bad muxed output, restore the
+            # intact video-only render to the expected path, keep the WAV.
+            if mux_result.returncode != 0:
+                try:
+                    if os.path.exists(str(output_path)):
+                        os.remove(str(output_path))
+                except Exception:
+                    pass
+                try:
+                    os.rename(temp_output, output_path)
+                except Exception as _re:
+                    self._log(f"  ERROR: could not restore video-only file: {_re}")
+                _stderr = mux_result.stderr or mux_result.stdout or ""
+                self._log("  AUDIO MUX FAILED — video preserved WITHOUT audio.")
+                self._log(f"  Video (no audio) saved at: {output_path}")
+                self._log(f"  Audio WAV kept for manual mux: {temp_audio}")
+                if diag:
+                    diag.kv("mux_recovery",
+                            "video preserved without audio; WAV kept")
+                    diag.kv("video_preserved", str(output_path))
+                    diag.kv("audio_wav_kept", temp_audio)
+                    diag.close(success=False)
+                _error_dialog(
+                    "Audio Mux Failed",
+                    "Muxing the audio into the video failed "
+                    f"(ffmpeg returned {mux_result.returncode}).\n\n"
+                    "Your video was preserved WITHOUT audio at:\n"
+                    f"{output_path}\n\n"
+                    "The extracted audio (WAV) was kept so you can mux it "
+                    "manually:\n"
+                    f"{temp_audio}",
+                    stderr_text=_stderr)
+                raise Exception("audio mux failed")
+
+            # ── Fix 4: verify the muxed output before trusting it ──────────
+            _ok, _detail = _verify_output(output_path, _expected_dur)
+            if not _ok:
+                # The muxed file is bad.  Restore the intact video-only render
+                # and keep the WAV — same recovery as a hard mux failure.
+                try:
+                    if os.path.exists(str(output_path)):
+                        os.remove(str(output_path))
+                except Exception:
+                    pass
+                try:
+                    os.rename(temp_output, output_path)
+                except Exception as _re:
+                    self._log(f"  ERROR: could not restore video-only file: {_re}")
+                self._log(f"  OUTPUT VERIFICATION FAILED: {_detail}")
+                self._log(f"  Video (no audio) saved at: {output_path}")
+                self._log(f"  Audio WAV kept for manual mux: {temp_audio}")
+                if diag:
+                    diag.kv("verify", f"FAILED — {_detail}")
+                    diag.kv("video_preserved", str(output_path))
+                    diag.kv("audio_wav_kept", temp_audio)
+                    diag.close(success=False)
+                _error_dialog(
+                    "Output Verification Failed",
+                    "The finished file failed an integrity check:\n\n"
+                    f"{_detail}\n\n"
+                    "Your video was preserved WITHOUT audio at:\n"
+                    f"{output_path}\n\n"
+                    "The extracted audio (WAV) was kept:\n"
+                    f"{temp_audio}")
+                raise Exception("output verification failed")
+
+            if diag:
+                diag.kv("verify", f"OK — duration {_detail}")
+
+            # Verified good — only now is it safe to delete the temp files.
             try:
                 os.remove(temp_output)
             except:
@@ -10581,6 +10766,25 @@ class RestorationWizard(BaseWindow):
             if diag:
                 diag.section("Step 3: Audio Mux")
                 diag.kv("mux", "SKIPPED — no audio stream")
+
+            # ── Fix 4: verify the video-only output too ────────────────────
+            _ok, _detail = _verify_output(output_path, _expected_dur)
+            if not _ok:
+                # No temp copy exists here (output_path is the only render),
+                # so leave it in place for the user to inspect and fail loudly.
+                self._log(f"  OUTPUT VERIFICATION FAILED: {_detail}")
+                if diag:
+                    diag.kv("verify", f"FAILED — {_detail}")
+                    diag.close(success=False)
+                _error_dialog(
+                    "Output Verification Failed",
+                    "The finished file failed an integrity check:\n\n"
+                    f"{_detail}\n\n"
+                    "The file was left in place for inspection at:\n"
+                    f"{output_path}")
+                raise Exception("output verification failed")
+            if diag:
+                diag.kv("verify", f"OK — duration {_detail}")
 
         self._update_progress(1.0)
 
