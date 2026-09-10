@@ -187,8 +187,16 @@ Pushing a `vX.Y.Z` tag runs `.github/workflows/build.yml`, which builds the
 EXE, publishes a GitHub Release (using the matching `## Version X.Y.Z` section
 of `RELEASE_NOTES.md` as the body), and — via the **"Sync README version to
 tag"** step — rewrites the mechanical version strings in `README.md` (title
-header, download link, download filename, pipeline heading) to match the tag
+header, download link, download filenames, pipeline heading) to match the tag
 and commits them back to `main` with `[skip ci]`.
+
+Every release attaches **two** downloads:
+- `VCG_Deinterlacer_<ver>.exe` — the onefile build.
+- `VCG_Deinterlacer_<ver>_standalone.zip` — the standalone folder, an
+  AV-friendly alternative. It is **not** a second compile: the "Package
+  standalone folder" step repackages the `<module>.dist` folder that the
+  onefile build already produces as an intermediate, renaming the in-folder
+  binary to `VCG_Deinterlacer.exe`. The standalone ZIP is never signed.
 
 Per-release checklist (still manual):
 1. Bump `VERSION` / `BUILD_DATE` in the source `.py`.

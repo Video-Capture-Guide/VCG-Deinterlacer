@@ -7,16 +7,29 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 
 ## Download
 
-There are three ways to get VCG Deinterlacer — pick whichever suits you:
+There are four ways to get VCG Deinterlacer. **Not sure which is for you? Jump to [Which download should I pick?](#which-download-should-i-pick)** — for most people it's option 1.
 
-**1. Ready-to-run app (easiest)**
-**[Download VCG_Deinterlacer.exe — 1.7.8](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)** — a single Windows executable. Save it anywhere and double-click it; there is nothing to unzip or install. On first launch the app automatically downloads FFmpeg and VapourSynth (~136 MB, one time only).
+**1. Single EXE — the simple choice**
+**[Download VCG_Deinterlacer.exe — 1.7.8](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)** — one Windows file. Save it anywhere and double-click; there is nothing to unzip or install. On first launch the app automatically downloads FFmpeg and VapourSynth (~136 MB, one time only).
 
-**2. Build it yourself from source**
+**2. Standalone ZIP — if your antivirus blocks the single EXE**
+On the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), download **`VCG_Deinterlacer_1.7.8_standalone.zip`**. This is the *same program*, just delivered as a folder of files instead of one self-contained EXE. Some antivirus tools flag the single EXE as a false positive because of the way it unpacks itself in memory when it starts; the standalone version doesn't do that, so scanners usually leave it alone. Extract the ZIP, open the folder it creates, and double-click **`VCG_Deinterlacer.exe`** inside. **Keep the whole folder together** — the EXE needs the files next to it to run. First launch still auto-downloads FFmpeg and VapourSynth.
+
+**3. Build it yourself from source**
 Prefer to compile your own binary? Grab the source — the **Source code (zip)** link on the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), or `git clone` this repo — and run `build_vcg_deinterlacer.bat`. You get the same `VCG_Deinterlacer.exe` as option 1. See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for the full steps.
 
-**3. Run the Python script directly**
+**4. Run the Python script directly**
 If you already have **Python 3.12** and the required packages installed, you can run the app straight from the source file: `python vcg_deinterlacer_v128.py`. The dependency list is in [`requirements.txt`](requirements.txt) (`pip install -r requirements.txt`). FFmpeg and VapourSynth are still fetched automatically on first launch if they aren't already present.
+
+### Which download should I pick?
+
+| If you… | Download this | Why |
+|---|---|---|
+| Just want it to work (most people) | **1. Single EXE** | One file, double-click, done. |
+| Got a virus/"trojan" warning on the EXE, or your antivirus deleted it | **2. Standalone ZIP** | Same app, packaged so it doesn't trip antivirus false positives. No settings to change. |
+| Are a developer, or want to read or modify the code | **3. Source** (build it) or **4. Run the `.py`** | Full source; compile your own EXE or run it in Python. |
+
+> **About the antivirus warnings:** VCG Deinterlacer is safe and open-source — you can read every line of it in this repo. The single EXE is built with [Nuitka](https://nuitka.net/), which packs the whole app into one file; a few antivirus engines mistake that packing for malware and show a *generic* alert (names like `Trojan.Win32.Agent.*`). It's a known false positive, not a real detection. If you hit it, use the **Standalone ZIP (option 2)**, which avoids the packing that causes it.
 
 ---
 
@@ -98,7 +111,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 On all future launches the wizard opens directly with no setup step.
 
-Prefer to compile the EXE yourself, or run the `.py` directly? See the **Download** section above and [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md).
+**Antivirus blocked the download?** Use the **Standalone ZIP** instead (option 2 in [Download](#download)) — extract it and run `VCG_Deinterlacer.exe` from inside the folder, keeping the folder intact. Prefer to compile the EXE yourself or run the `.py` directly? See the **Download** section above and [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md).
 
 ---
 
