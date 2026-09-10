@@ -148,3 +148,41 @@ jobs:
             Write-Warning "No RELEASE_NOTES.md section for $ver - using auto-generated notes."
             gh release create $env:GITHUB_REF_NAME @files --generate-notes --title "VCG Deinterlacer $env:GITHUB_REF_NAME"
           }
+
+      # ---- Keep README's displayed version in sync (tags only) ----
+      # The project-page README carries the version in a few mechanical spots
+      # (title header, download link, download filename, pipeline heading).
+      # On a real release (tag) rewrite those to match the tag and commit the
+      # change back to main with [skip ci] so this build does not retrigger.
+      # The editorial "Version History" table row is intentionally left alone —
+      # its per-release notes are written by hand (see RELEASE_NOTES.md).
+      - name: Sync README version to tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.ver.outputs.version }}'
+
+          # The build checked out the tag (detached HEAD); move to main so the
+          # commit lands on the branch the README is served from.
+          git fetch origin main
+          git checkout -B main origin/main
+
+          $readme = Get-Content README.md -Raw
+          $readme = $readme -replace '(?m)^### Version [\d.]+ — by', "### Version $ver — by"
+          $readme = $readme -replace 'Download VCG_Deinterlacer\.exe — [\d.]+\]', "Download VCG_Deinterlacer.exe — $ver]"
+          $readme = $readme -replace 'VCG_Deinterlacer_[\d.]+\.zip', "VCG_Deinterlacer_$ver.zip"
+          $readme = $readme -replace '### Processing Pipeline \(v[\d.]+\)', "### Processing Pipeline (v$ver)"
+          Set-Content README.md -Value $readme -NoNewline -Encoding utf8
+
+          git diff --quiet README.md
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "README already at version $ver - nothing to sync."
+            exit 0
+          }
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md
+          git commit -m "docs: sync README to $ver [skip ci]"
+          git push origin HEAD:main
+          Write-Host "Synced README version strings to $ver on main."

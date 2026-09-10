@@ -1,5 +1,5 @@
 # VCG Deinterlacer
-### Version 1.7.6 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
+### Version 1.7.8 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
 
@@ -7,7 +7,7 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 
 ## Download
 
-**[Download VCG_Deinterlacer.exe — 1.7.6](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
+**[Download VCG_Deinterlacer.exe — 1.7.8](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
 
 Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
 
@@ -83,7 +83,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ## Installation
 
-1. Download `VCG_Deinterlacer_1.7.6.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+1. Download `VCG_Deinterlacer_1.7.8.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
@@ -175,7 +175,7 @@ If motion looks jerky or stuttery after processing, try switching the field orde
 
 ## Technical Details
 
-### Processing Pipeline (v1.7.6)
+### Processing Pipeline (v1.7.8)
 
 Every encode runs through a **16-bit VapourSynth pipeline**. The source is lifted to 16-bit integer at the very start (`fmtc.bitdepth`) and all operations — QTGMC, BM3D, FineDehalo, colour cast correction, levels — run natively at that depth with no mid-chain round-trips to 8-bit. 10-bit or non-standard sources are converted to 8-bit YUV at load time before anything else runs.
 
@@ -234,6 +234,8 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
+| 1.7.8 | 2026-09-09 | A failed audio-mux pass can no longer destroy a finished render: on mux failure the truncated file is removed and the intact video-only render is restored (with the audio WAV kept for manual muxing); a pre-flight free-disk-space check skips the mux early if the drive can't hold the second copy; and an ffprobe integrity check verifies the output before declaring success, so a truncated file is now correctly reported as FAILED instead of SUCCESS |
+| 1.7.7 | 2026-09-07 | App version now shown prominently on the welcome/splash screen, in accent colour beneath the title, so you can confirm your build at a glance |
 | 1.7.6 | 2026-09-01 | Manual field order now locks in and is never overwritten by background auto-detection; auto-detection of field order and telecine disabled for multi-file batches (with an on-screen note), so batch badges no longer hang on "Detecting…"; new plain-language settings summary on the Output & Process page |
 | 1.7.5 | 2026-08-30 | Upscaled SD video now gets a real BT.601 → BT.709 pixel conversion when the result is HD-sized, so colours are correct on YouTube |
 | 1.7.4 | 2026-08-02 | Choose your own preview frame on the Y/C Delay page; live film-grain preview with 1×/2×/4× zoom; wider, more visible scrollbar; diagnostic log text points to the support email |

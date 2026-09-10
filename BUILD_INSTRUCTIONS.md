@@ -181,6 +181,23 @@ Upload `VCG_Deinterlacer_1.6.0.zip` to your distribution channels:
 - **VideoHelp** — https://www.videohelp.com/software
 - **YouTube description** — link in your video tutorials
 
+### Automated release (CI)
+
+Pushing a `vX.Y.Z` tag runs `.github/workflows/build.yml`, which builds the
+EXE, publishes a GitHub Release (using the matching `## Version X.Y.Z` section
+of `RELEASE_NOTES.md` as the body), and — via the **"Sync README version to
+tag"** step — rewrites the mechanical version strings in `README.md` (title
+header, download link, download filename, pipeline heading) to match the tag
+and commits them back to `main` with `[skip ci]`.
+
+Per-release checklist (still manual):
+1. Bump `VERSION` / `BUILD_DATE` in the source `.py`.
+2. Bump the default `SOURCE`/`VERSION` in `build_vcg_deinterlacer.bat`.
+3. Add a `## Version X.Y.Z` section to `RELEASE_NOTES.md`.
+4. Add a row to the **Version History** table in `README.md` (the editorial
+   notes are not auto-generated; the CI step only touches the version strings).
+5. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
 ---
 
 ## How Portable Mode Works
