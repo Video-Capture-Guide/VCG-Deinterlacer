@@ -7,9 +7,16 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 
 ## Download
 
-**[Download VCG_Deinterlacer.exe — 1.7.8](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)**
+There are three ways to get VCG Deinterlacer — pick whichever suits you:
 
-Extract the ZIP anywhere and double-click `VCG_Deinterlacer.exe`. On first launch, the app automatically downloads and installs FFmpeg and VapourSynth — no manual setup required.
+**1. Ready-to-run app (easiest)**
+**[Download VCG_Deinterlacer.exe — 1.7.8](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)** — a single Windows executable. Save it anywhere and double-click it; there is nothing to unzip or install. On first launch the app automatically downloads FFmpeg and VapourSynth (~136 MB, one time only).
+
+**2. Build it yourself from source**
+Prefer to compile your own binary? Grab the source — the **Source code (zip)** link on the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), or `git clone` this repo — and run `build_vcg_deinterlacer.bat`. You get the same `VCG_Deinterlacer.exe` as option 1. See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for the full steps.
+
+**3. Run the Python script directly**
+If you already have **Python 3.12** and the required packages installed, you can run the app straight from the source file: `python vcg_deinterlacer_v128.py`. The dependency list is in [`requirements.txt`](requirements.txt) (`pip install -r requirements.txt`). FFmpeg and VapourSynth are still fetched automatically on first launch if they aren't already present.
 
 ---
 
@@ -81,15 +88,17 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ---
 
-## Installation
+## Installation (ready-to-run EXE)
 
-1. Download `VCG_Deinterlacer_1.7.8.zip` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
-2. Extract the ZIP to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
+1. Download `VCG_Deinterlacer_1.7.8.exe` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+2. Save it to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
 5. After setup completes, the main wizard opens automatically.
 
 On all future launches the wizard opens directly with no setup step.
+
+Prefer to compile the EXE yourself, or run the `.py` directly? See the **Download** section above and [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md).
 
 ---
 
