@@ -163,7 +163,7 @@ Write-Host "Created: $out.zip"
    (or a machine without FFmpeg/VapourSynth installed)
 2. Double-click `VCG_Deinterlacer.exe`
 3. The First Run Setup window should appear and:
-   - Download `vcg-deps-v6.zip` (~136 MB) from GitHub
+   - Download `vcg-deps-v10.zip` (~136 MB) from GitHub
    - Extract it, creating a `_deps\` folder next to the EXE containing:
      - `_deps\ffmpeg\` — ffmpeg.exe and ffprobe.exe
      - `_deps\vs\` — portable VapourSynth runtime (vspipe.exe, Python DLLs, site-packages)
@@ -210,13 +210,13 @@ Per-release checklist (still manual):
 
 ## How Portable Mode Works
 
-The app uses a fully **self-contained portable deps bundle** (`vcg-deps-v6.zip`) hosted on
+The app uses a fully **self-contained portable deps bundle** (`vcg-deps-v10.zip`) hosted on
 GitHub Releases. No system-wide installation of FFmpeg or VapourSynth is required or performed.
 
 **On first launch:**
 1. App checks for `_deps\vcg_deps.version` containing the expected version number
 2. If missing or wrong version, `FirstRunSetupWindow` opens
-3. A single ZIP (`vcg-deps-v6.zip`, ~136 MB) is downloaded from the `vcg-deinterlacer-deps` GitHub repo
+3. A single ZIP (`vcg-deps-v10.zip`, ~136 MB) is downloaded from the `vcg-deinterlacer-deps` GitHub repo
 4. The ZIP is extracted — the root folder is renamed to `_deps\` next to the EXE
 5. `paths.json` is written next to the EXE pointing to `_deps\ffmpeg\ffmpeg.exe`,
    `_deps\ffmpeg\ffprobe.exe`, and `_deps\vs\vspipe.exe`
@@ -235,11 +235,11 @@ _deps\
     portable.vs    (marker file that enables portable mode)
     site-packages\ (havsfunc, mvsfunc, vsutil, adjust, vapoursynth bindings)
     plugins64\     (lsmas, mvtools, znedi3, fmtconv, etc. + nnedi3_weights.bin)
-  vcg_deps.version  (contains "6")
+  vcg_deps.version  (contains "10")
 ```
 
 **On subsequent launches:**
-- `_deps\vcg_deps.version` contains `6` → deps check passes
+- `_deps\vcg_deps.version` contains `10` → deps check passes
 - `FirstRunSetupWindow` is skipped entirely
 - `paths.json` is read to locate ffmpeg/ffprobe/vspipe
 
@@ -444,6 +444,57 @@ handles this using the `video_format` config key.
 
 ---
 
+## Development Notes — 1.7.9 Session (2026-09-11): Live Preview & Frame Rate Mode
+
+Implementation notes for 1.7.9 (Live Preview window, Frame Rate Mode chooser,
+output-rate mux fix). Drawn from the code — read before touching the preview
+window, the `.vpy` generator, or the mux command.
+
+### 1. The live preview reuses the real pipeline, not a separate code path
+
+`render_preview_frame()` calls the same `generate_vpy_script()` the full render
+uses, then runs the identical **three-tier vspipe retry** (bundled vspipe with the
+portable env → bundled vspipe with the system env → pip-installed vspipe). This is
+deliberate: a preview that used a different script or a different runtime could show
+something the real render won't produce. Keep the retry order in sync with
+`_process_single_file` if either changes.
+
+### 2. Preview seeks by TIME, not frame index — because QTGMC bob doubles frames
+
+Double-rate QTGMC emits one frame per field (2× the source frame count), so a raw
+frame index into the processed clip does not line up with the same index into the
+raw source. The preview converts the slider position to **seconds** and seeks both
+the processed and the "before" frame by time, so the two stay aligned regardless of
+frame-rate mode.
+
+### 3. The "before" frame must be re-stretched to the processed DAR
+
+The raw source frame is decoded with its stored (often non-square / unflagged)
+pixels — e.g. a HuffYUV capture displays wider than 4:3 — while the processed frame
+is already PAR-corrected to square pixels. `_apply()` resizes the BEFORE image to
+the processed frame's display aspect ratio (keeping the source height) so the
+Before/After toggle is a true apples-to-apples comparison, not a pixel-aspect
+mismatch.
+
+### 4. Mux frame rate must match what the pipeline actually produced
+
+The mux step previously hard-stamped `-r 60000/1001` (59.94), which is only correct
+for double-rate NTSC. Single-rate and inverse-telecine (film) output then played
+back at the wrong speed with audio drifting. `_output_frame_rate()` now returns the
+rate the `.vpy` actually produces (progressive/single → 29.97·25, double → 59.94·50,
+IVTC → 23.976·25) and both `-r` flags in the mux command use it. If you add a new
+frame-rate path to the generator, update `_output_frame_rate()` in lockstep.
+
+### 5. Page mouse-wheel must be bound on the toplevel, not the page canvas
+
+Tk delivers `<MouseWheel>` only to the widget under the pointer, whose bindtags
+include its toplevel but **not** the intermediate page canvas — so binding the
+canvas alone never fires when the pointer is over the child widgets that fill each
+page. Binding the wheel on the toplevel (`_on_page_mousewheel`) and forwarding to
+`self._page_canvas.yview_scroll` is what makes scrolling work across the whole page.
+
+---
+
 ## Version History
 
 | Version | Date | Notes |
@@ -492,7 +543,7 @@ Delete the `dist\` folder completely and rebuild from scratch (stale Nuitka cach
 - Check internet connection
 - Try disabling VPN or firewall temporarily
 - Download manually: https://github.com/Video-Capture-Guide/vcg-deinterlacer-deps/releases/latest
-  - Download `vcg-deps-v6.zip` and extract it — rename the extracted folder to `_deps`
+  - Download `vcg-deps-v10.zip` and extract it — rename the extracted folder to `_deps`
     and place it next to `VCG_Deinterlacer.exe`
 
 **App opens but processing fails immediately**
