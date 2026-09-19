@@ -4650,70 +4650,76 @@ class RestorationWizard(BaseWindow):
         win = tk.Toplevel(self)
         self._pv_win = win
         win.title("Live Preview")
-        win.configure(bg=Colors.BG_MAIN)
+        # Distinct look from the wizard: a lighter "elevated card" surface with
+        # an accent border so it clearly reads as a separate modal dialog rather
+        # than blending into the main page (which uses BG_MAIN).
+        _pv_bg = Colors.BG_CARD
+        _pv_backdrop = "#2A2A2A"   # neutral grey behind the frame, not black
+        win.configure(bg=_pv_bg, highlightthickness=3,
+                      highlightbackground=Colors.ACCENT, highlightcolor=Colors.ACCENT)
         win.resizable(True, True)
         w, h = 940, 760
         x = self.winfo_x() + (self.winfo_width() - w) // 2
         y = self.winfo_y() + (self.winfo_height() - h) // 2
         win.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
         win.minsize(640, 520)
-        win.transient(self)   # stays above wizard, but NOT modal (no grab_set)
+        win.transient(self)   # made modal (grab_set) at the end of this method
 
         # ── Header: which filters are active ────────────────────────────────
-        head = tk.Frame(win, bg=Colors.BG_MAIN)
+        head = tk.Frame(win, bg=_pv_bg)
         head.pack(fill='x', padx=16, pady=(14, 6))
         tk.Label(head, text="Active filters (cumulative up to current step)",
                  font=('Segoe UI', 9), fg=Colors.TEXT_DISABLED,
-                 bg=Colors.BG_MAIN).pack(anchor='w')
+                 bg=_pv_bg).pack(anchor='w')
         summary_lbl = tk.Label(head, text=_preview_filter_summary(self._pv_config),
                                font=('Segoe UI', 11, 'bold'), fg=Colors.ACCENT,
-                               bg=Colors.BG_MAIN, wraplength=w - 40, justify='left')
+                               bg=_pv_bg, wraplength=w - 40, justify='left')
         summary_lbl.pack(anchor='w', pady=(2, 0))
 
         # ── Bottom controls (packed before the image so they stay pinned) ────
-        controls = tk.Frame(win, bg=Colors.BG_MAIN)
+        controls = tk.Frame(win, bg=_pv_bg)
         controls.pack(side='bottom', fill='x', padx=16, pady=(6, 14))
 
         # Seek row
-        seek_row = tk.Frame(controls, bg=Colors.BG_MAIN)
+        seek_row = tk.Frame(controls, bg=_pv_bg)
         seek_row.pack(fill='x')
         tk.Label(seek_row, text="Frame:", font=('Segoe UI', 10),
-                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(side='left')
+                 fg=Colors.TEXT_PRIMARY, bg=_pv_bg).pack(side='left')
         self._pv_frame_var = tk.IntVar(value=min(self._pv_total // 2,
                                                  self._pv_total - 1))
         frame_entry = tk.Entry(seek_row, width=8, justify='center',
-                               bg=Colors.BG_CARD, fg=Colors.TEXT_PRIMARY,
+                               bg=Colors.BG_DARK, fg=Colors.TEXT_PRIMARY,
                                insertbackground=Colors.TEXT_PRIMARY,
                                relief='flat')
         frame_entry.pack(side='left', padx=(6, 6))
         pos_lbl = tk.Label(seek_row, text="", font=('Segoe UI', 9),
-                           fg=Colors.TEXT_DISABLED, bg=Colors.BG_MAIN)
+                           fg=Colors.TEXT_DISABLED, bg=_pv_bg)
         pos_lbl.pack(side='right')
         scale = tk.Scale(seek_row, from_=0, to=max(0, self._pv_total - 1),
                          orient='horizontal', variable=self._pv_frame_var,
-                         showvalue=False, bg=Colors.BG_MAIN,
+                         showvalue=False, bg=_pv_bg,
                          fg=Colors.TEXT_PRIMARY, highlightthickness=0,
                          troughcolor=Colors.BG_DARK,
                          activebackground=Colors.ACCENT)
         scale.pack(side='left', fill='x', expand=True, padx=(6, 10))
 
         # Button row: zoom, before/after, status, close
-        btn_row = tk.Frame(controls, bg=Colors.BG_MAIN)
+        btn_row = tk.Frame(controls, bg=_pv_bg)
         btn_row.pack(fill='x', pady=(8, 0))
         tk.Label(btn_row, text="Zoom:", font=('Segoe UI', 10),
-                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(side='left')
+                 fg=Colors.TEXT_PRIMARY, bg=_pv_bg).pack(side='left')
         zoom_btns = {}
         view_btns = {}
 
         status_lbl = tk.Label(btn_row, text="", font=('Segoe UI', 10),
-                              fg=Colors.WARNING, bg=Colors.BG_MAIN)
+                              fg=Colors.WARNING, bg=_pv_bg)
         status_lbl.pack(side='right', padx=(10, 10))
 
         # ── Image canvas with pan scrollbars ────────────────────────────────
-        img_wrap = tk.Frame(win, bg=Colors.BG_MAIN)
+        img_wrap = tk.Frame(win, bg=_pv_bg)
         img_wrap.pack(fill='both', expand=True, padx=16, pady=(0, 4))
         ensure_wide_scrollbar_style()
-        canvas = tk.Canvas(img_wrap, bg='#0E0E0E', highlightthickness=0)
+        canvas = tk.Canvas(img_wrap, bg=_pv_backdrop, highlightthickness=0)
         vsb = ttk.Scrollbar(img_wrap, orient='vertical',
                             style='Wide.Vertical.TScrollbar', command=canvas.yview)
         hsb = ttk.Scrollbar(img_wrap, orient='horizontal', command=canvas.xview)
@@ -4857,7 +4863,7 @@ class RestorationWizard(BaseWindow):
             self._pv_show_after = after
             _redraw()   # syncs the BEFORE/AFTER button highlight
         tk.Label(btn_row, text="View:", font=('Segoe UI', 10),
-                 fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(side='left', padx=(18, 4))
+                 fg=Colors.TEXT_PRIMARY, bg=_pv_bg).pack(side='left', padx=(18, 4))
         before_btn = ModernButton(btn_row, "BEFORE", lambda: _set_view(False),
                                   primary=False, width=100, height=30)
         before_btn.pack(side='left', padx=3)
@@ -4890,12 +4896,25 @@ class RestorationWizard(BaseWindow):
             self._pv_proc_img = None
             self._pv_src_img = None
             self._pv_photo = None
+            try:
+                win.grab_release()   # release the modal grab before destroying
+            except Exception:
+                pass
             win.destroy()
         win.protocol("WM_DELETE_WINDOW", _close)
         ModernButton(btn_row, "Close", _close, width=80, height=30).pack(side='right')
 
         # Kick off the first render.
         _on_frame_change()
+
+        # Modal: block the wizard (Back / Next / sidebar) until the preview is
+        # closed, so the user can't advance the page out from under the popup.
+        # grab_set requires a viewable window, so wait for it to map first.
+        try:
+            win.wait_visibility()
+            win.grab_set()
+        except Exception:
+            pass
     
     def _build_ui(self):
         # Create menu bar
