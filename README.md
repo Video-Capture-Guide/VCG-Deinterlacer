@@ -1,5 +1,5 @@
 # VCG Deinterlacer
-### Version 1.7.8 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
+### Version 1.7.9 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
 
@@ -10,10 +10,10 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 There are four ways to get VCG Deinterlacer. **Not sure which is for you? Jump to [Which download should I pick?](#which-download-should-i-pick)** — for most people it's option 1.
 
 **1. Single EXE — the simple choice**
-**[Download VCG_Deinterlacer.exe — 1.7.8](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)** — one Windows file. Save it anywhere and double-click; there is nothing to unzip or install. On first launch the app automatically downloads FFmpeg and VapourSynth (~136 MB, one time only).
+**[Download VCG_Deinterlacer.exe — 1.7.9](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)** — one Windows file. Save it anywhere and double-click; there is nothing to unzip or install. On first launch the app automatically downloads FFmpeg and VapourSynth (~136 MB, one time only).
 
 **2. Standalone ZIP — if your antivirus blocks the single EXE**
-On the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), download **`VCG_Deinterlacer_1.7.8_standalone.zip`**. This is the *same program*, just delivered as a folder of files instead of one self-contained EXE. Some antivirus tools flag the single EXE as a false positive because of the way it unpacks itself in memory when it starts; the standalone version doesn't do that, so scanners usually leave it alone. Extract the ZIP, open the folder it creates, and double-click **`VCG_Deinterlacer.exe`** inside. **Keep the whole folder together** — the EXE needs the files next to it to run. First launch still auto-downloads FFmpeg and VapourSynth.
+On the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), download **`VCG_Deinterlacer_1.7.9_standalone.zip`**. This is the *same program*, just delivered as a folder of files instead of one self-contained EXE. Some antivirus tools flag the single EXE as a false positive because of the way it unpacks itself in memory when it starts; the standalone version doesn't do that, so scanners usually leave it alone. Extract the ZIP, open the folder it creates, and double-click **`VCG_Deinterlacer.exe`** inside. **Keep the whole folder together** — the EXE needs the files next to it to run. First launch still auto-downloads FFmpeg and VapourSynth.
 
 **3. Build it yourself from source**
 Prefer to compile your own binary? Grab the source — the **Source code (zip)** link on the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), or `git clone` this repo — and run `build_vcg_deinterlacer.bat`. You get the same `VCG_Deinterlacer.exe` as option 1. See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for the full steps.
@@ -103,7 +103,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ## Installation (ready-to-run EXE)
 
-1. Download `VCG_Deinterlacer_1.7.8.exe` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+1. Download `VCG_Deinterlacer_1.7.9.exe` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Save it to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
@@ -197,7 +197,7 @@ If motion looks jerky or stuttery after processing, try switching the field orde
 
 ## Technical Details
 
-### Processing Pipeline (v1.7.8)
+### Processing Pipeline (v1.7.9)
 
 Every encode runs through a **16-bit VapourSynth pipeline**. The source is lifted to 16-bit integer at the very start (`fmtc.bitdepth`) and all operations — QTGMC, BM3D, FineDehalo, colour cast correction, levels — run natively at that depth with no mid-chain round-trips to 8-bit. 10-bit or non-standard sources are converted to 8-bit YUV at load time before anything else runs.
 
