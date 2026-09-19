@@ -969,6 +969,74 @@ def _fps_to_float(fps_str):
         return 0.0
 
 
+def _preview_python_direct(script_path, frame_idx, ffmpeg_cmd):
+    """Render ONE preview frame in-process via a real python.exe.
+
+    Mirrors _process_single_file's retry 3A: run the self-contained bundled
+    ``_deps/vs/python.exe`` (deps v10+), else a filtered *system* Python, import
+    vapoursynth, exec the generated .vpy, and pipe just the selected output frame
+    to *ffmpeg_cmd*.  This is the path that works inside the frozen EXE, where
+    ``_PIP_VSPIPE`` is None (find_spec can't see system site-packages) and the
+    bundled vspipe's VSScript init fails.  Returns the _run_piped result, or None
+    when no usable Python / bundled vapoursynth.pyd is available.
+    """
+    site_pkg = os.path.join(VS_DEPS_DIR, 'site-packages')
+    plugins = os.path.join(VS_DEPS_DIR, 'plugins64')
+    if not os.path.isdir(plugins):
+        plugins = os.path.join(VS_DEPS_DIR, 'plugins')
+    if not os.path.isfile(os.path.join(site_pkg, 'vapoursynth.pyd')):
+        return None
+
+    # Strip Nuitka's onefile extraction dir from PATH so DLL resolution uses
+    # only our known-good deps folder (matches _process_single_file).
+    _la = os.path.normcase(os.path.normpath(os.environ.get('LOCALAPPDATA', '')))
+    _vcg_prefix = (_la + os.sep + 'vcg_') if _la else ''
+
+    def _clean_path(base, prepend=()):
+        entries = [e for e in base.split(os.pathsep)
+                   if not (e and _vcg_prefix and
+                           os.path.normcase(os.path.normpath(e)).startswith(_vcg_prefix))]
+        return os.pathsep.join(list(prepend) + entries)
+
+    # Prefer the self-contained bundled python.exe; else a real system Python
+    # (never sys.executable when frozen — that is the Nuitka EXE proxy).
+    py = None
+    bundled = os.path.join(VS_DEPS_DIR, 'python.exe')
+    if os.path.isfile(bundled):
+        py = bundled
+    else:
+        import shutil as _sh
+        _fp = _clean_path(os.environ.get('PATH', ''))
+        for _cand in ('py', 'python', 'python3'):
+            _p = _sh.which(_cand, path=_fp)
+            if _p and os.path.normcase(_p) != os.path.normcase(sys.executable or ''):
+                py = _p
+                break
+        if py is None and os.path.basename(sys.executable or '').lower().startswith('python'):
+            py = sys.executable
+    if py is None:
+        return None
+
+    wrapper = '\n'.join([
+        'import sys, os',
+        f'for _d in [{repr(VS_DEPS_DIR)}, {repr(plugins)}]:',
+        '    if os.path.isdir(_d) and hasattr(os, "add_dll_directory"): os.add_dll_directory(_d)',
+        f'sys.path.insert(0, {repr(site_pkg)})',
+        'import vapoursynth as vs',
+        f'with open({repr(str(script_path))}, "r", encoding="utf-8") as _f: _code = _f.read()',
+        f'exec(compile(_code, {repr(str(script_path))}, "exec"))',
+        '_r = vs.get_output(0)',
+        '_n = _r.clip if hasattr(_r, "clip") else _r',
+        f'_i = {int(frame_idx)}',
+        '_i = 0 if _i < 0 else (len(_n) - 1 if _i >= len(_n) else _i)',
+        '_n = _n[_i]',
+        '_n.output(sys.stdout.buffer, y4m=True)',
+    ])
+    env = os.environ.copy()
+    env['PATH'] = _clean_path(env.get('PATH', ''), prepend=(VS_DEPS_DIR, plugins))
+    return _run_piped([py, '-c', wrapper], ffmpeg_cmd, prod_env=env)
+
+
 def render_preview_frame(config, seconds, out_png):
     """Render ONE frame of the real VapourSynth pipeline to a PNG.
 
@@ -1013,10 +1081,26 @@ def render_preview_frame(config, seconds, out_png):
         # 3) pip-installed vspipe (R74+) — the path that works on the dev box
         if r.returncode != 0 and _PIP_VSPIPE and _PIP_VSPIPE != VSPIPE_PATH:
             r = _try(_PIP_VSPIPE, None, None)
+        # 4) bundled python.exe in-process — the path that works in the frozen
+        #    EXE, where _PIP_VSPIPE is None and the bundled vspipe fails to
+        #    initialize VSScript.  Mirrors _process_single_file's retry 3A.
+        if r.returncode != 0:
+            _pd = _preview_python_direct(script_path, frame_idx, ffmpeg_png)
+            if _pd is not None:
+                r = _pd
 
         if (r.returncode == 0 and os.path.exists(out_png)
                 and os.path.getsize(out_png) > 100):
             return out_png
+        # Surface the real cause instead of failing silently, so a preview
+        # failure can be diagnosed from the temp folder.
+        try:
+            with open(os.path.join(tempfile.gettempdir(),
+                                   'vcg_preview_last_error.txt'), 'w',
+                      encoding='utf-8') as _ef:
+                _ef.write((getattr(r, 'stderr', '') or '')[-4000:])
+        except Exception:
+            pass
         return None
     except Exception:
         return None
