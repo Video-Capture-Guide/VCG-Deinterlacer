@@ -2,6 +2,58 @@
 
 ---
 
+## Version 1.7.9 — 2026-09-11
+
+### New: Live Preview — See Your Settings Before You Render
+
+You can now preview exactly what your restoration will look like without waiting
+for a full render. A new **🔍 Preview** button (between Back and Next, from the
+Source step onward) opens a live window that runs the real VapourSynth pipeline on
+a single frame and shows the result.
+
+- **Before/After toggle** — flip between the untouched source and the processed
+  frame (press Space, or use the BEFORE/AFTER buttons) for a true comparison.
+- **Scrub to any frame** — drag the slider or type a frame number to preview any
+  point in the clip.
+- **1×/2×/4× zoom** with panning, so you can inspect fine detail.
+- **Cumulative** — the preview reflects only the steps you have visited so far, so
+  it builds up as you move through the wizard.
+
+### New: Frame Rate Mode — Double-Rate "Bob" vs Single-Rate
+
+A new **Frame Rate Mode** choice on the Source Details page lets you pick how
+deinterlacing turns fields into frames:
+
+- **Double rate ("Bob")** — 59.94 fps (NTSC) / 50 fps (PAL). Every field becomes
+  its own frame for the smoothest, most fluid motion. Recommended, and the default.
+- **Single rate** — 29.97 fps / 25 fps. Each pair of fields becomes one frame, for
+  smaller files and maximum compatibility.
+
+An on-page explainer lays out the trade-offs so you can choose with confidence.
+
+### Fix: Correct Playback Speed for Single-Rate and Film (IVTC) Output
+
+The finished file now always carries the frame rate the pipeline actually
+produced. Previously the output was hard-stamped at 59.94 fps, so single-rate and
+inverse-telecine (film) renders could play back at the wrong speed with the audio
+drifting out of sync. Every mode is now stamped correctly.
+
+### New: Check for Updates
+
+A **Help → Check for Updates…** menu item checks GitHub for a newer release and
+tells you whether you are up to date, offering to open the Releases page if an
+update is available. It fails quietly if you are offline.
+
+### Change: Smoother Scrolling and Cleaner Output Filenames
+
+- The mouse wheel now scrolls every wizard page from anywhere on the page, and
+  each page opens scrolled to the top instead of inheriting the previous page's
+  scroll position.
+- Output files are now tagged with the version, e.g. `…_VCGD179.mov`, and a
+  numeric suffix is only added if that name is already taken.
+
+---
+
 ## Version 1.7.8 — 2026-09-09
 
 ### Fix: A Failed Audio Mux No Longer Destroys Your Render

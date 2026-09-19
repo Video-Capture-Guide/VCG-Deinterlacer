@@ -4,6 +4,16 @@
 
 # Build output and compiled EXE
 dist/
+dist_dev_*/
+
+# Downloaded portable deps bundle. Lives next to the source on the dev box;
+# the real bundle is distributed via the vcg-deinterlacer-deps Releases repo,
+# NOT tracked here (it is ~100 MB+ of binaries).
+_deps/
+
+# Personal local feature/fix prompt scratch (not for the repo)
+*-prompt.md
+*_PROMPT.md
 
 # Nuitka build caches
 *.build/
