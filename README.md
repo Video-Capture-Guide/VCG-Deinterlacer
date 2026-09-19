@@ -19,7 +19,7 @@ On the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/r
 Prefer to compile your own binary? Grab the source — the **Source code (zip)** link on the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), or `git clone` this repo — and run `build_vcg_deinterlacer.bat`. You get the same `VCG_Deinterlacer.exe` as option 1. See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for the full steps.
 
 **4. Run the Python script directly**
-If you already have **Python 3.12** and the required packages installed, you can run the app straight from the source file: `python vcg_deinterlacer_v128.py`. The dependency list is in [`requirements.txt`](requirements.txt) (`pip install -r requirements.txt`). FFmpeg and VapourSynth are still fetched automatically on first launch if they aren't already present.
+If you already have **Python 3.12** and the required packages installed, you can run the app straight from the source file: `python vcg_deinterlacer_v129.py`. The dependency list is in [`requirements.txt`](requirements.txt) (`pip install -r requirements.txt`). FFmpeg and VapourSynth are still fetched automatically on first launch if they aren't already present.
 
 ### Which download should I pick?
 
