@@ -444,7 +444,7 @@ handles this using the `video_format` config key.
 
 ---
 
-## Development Notes — 1.8.0 Session (2026-10-04): Film Detection & Override
+## Development Notes — 1.8.0 Session (2026-10-04/05): Film Detection & Override
 
 Implementation notes for 1.8.0 (content-based telecine detection, Frame Rate Mode
 ghosting, manual override, progressive sources). Read before touching
@@ -502,7 +502,26 @@ from `_on_field_order_var_change()`. Every widget lookup goes through `getattr` 
 the page has been rebuilt. `ModernRadioButton.set_enabled()` is the new ghosting
 primitive (ignores clicks and hover, draws in `TEXT_DISABLED`).
 
-### 5. Revisiting Source Details no longer re-runs the scan
+### 5. classify_source() must honour the container's progressive flag
+
+`classify_source()` recognised only `tt`/`tff` and `bb`/`bff` from ffprobe's
+`field_order`, left anything else as `'unknown'`, then forced `'tff'` for any
+1080-line source. A `field_order=progressive` iPhone MOV (h264, 1920×1080, 60 fps)
+therefore came back as `AVCHD / MTS (1920×1080i)` with field order TFF — so
+section 1 of Source Details (HD) announced an interlaced source even after Field
+Order, Telecine and Frame Rate Mode had all correctly settled on progressive via
+the content scan.
+
+`'progressive'` is now a recognised `field_order` value plus a `progressive` bool
+in the result, display names branch on it (`HD Progressive (1920×1080p)`,
+`HDV (1080p)`, `SD Progressive`), and the `if field_order == 'unknown': 'tff'`
+default no longer fires because the value is no longer unknown. `_on_files_changed`
+seeds `field_order`/`detected_field_order` from the probe so the page *opens* on
+Progressive rather than flipping to it later. The `source_class` is deliberately
+left as `avchd` — it only drives HD-vs-SD page routing, and that routing is still
+right for a progressive 1080p file.
+
+### 6. Revisiting Source Details no longer re-runs the scan
 
 The page now runs `_run_ivtc_detection()` only when there is no stored
 `ivtc_result`; otherwise it re-renders the stored one. This matters twice over: the

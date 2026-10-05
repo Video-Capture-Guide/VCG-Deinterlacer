@@ -56,7 +56,7 @@
 
 # Version constants
 VERSION = "1.8.0"
-BUILD_DATE = "2026-10-04"
+BUILD_DATE = "2026-10-05"
 VERSION_STRING = f"{VERSION} ({BUILD_DATE})"
 AUTHOR = "VideoCaptureGuide"
 AUTHOR_HANDLE = "@VideoCaptureGuide"
@@ -1598,7 +1598,8 @@ def classify_source(filepath):
       codec        : raw codec_name from ffprobe
       width, height: integers
       fps          : float
-      field_order  : 'tff' | 'bff' | 'unknown'
+      field_order  : 'tff' | 'bff' | 'progressive' | 'unknown'
+      progressive  : bool — container flags the stream as progressive
       par_needed   : bool — True only for HDV 1440x1080 (needs 1920x1080 scale)
       pix_fmt      : raw pix_fmt from ffprobe (e.g. 'yuv420p', 'yuv420p10le')
       needs_pixfmt_conversion : bool — True for 10-bit / non-standard YUV that
@@ -1617,6 +1618,7 @@ def classify_source(filepath):
         'height': 0,
         'fps': 0.0,
         'field_order': 'unknown',
+        'progressive': False,
         'par_needed': False,
         'pix_fmt': '',
         'needs_pixfmt_conversion': False,
@@ -1669,6 +1671,14 @@ def classify_source(filepath):
             result['field_order'] = 'tff'
         elif fo_raw in ('bb', 'bff'):
             result['field_order'] = 'bff'
+        elif fo_raw == 'progressive':
+            # The container flag is authoritative when it says progressive — a
+            # phone/DSLR 1080p clip is not an interlaced camcorder source, and
+            # must not be labelled or defaulted as one.
+            result['field_order'] = 'progressive'
+            result['progressive'] = True
+
+        prog = result['progressive']
 
         if codec == 'h264' and height == 1080:
             result['source_class'] = 'avchd'
@@ -1678,20 +1688,23 @@ def classify_source(filepath):
             # pixels (4:3 PAR) that must be scaled to 1920x1080 — same as HDV.
             # Canon and most others record native 1920x1080 square pixels.
             if width == 1440:
-                result['display_name'] = 'AVCHD / MTS (1440×1080i anamorphic)'
+                result['display_name'] = ('HD Progressive (1440×1080p anamorphic)'
+                                          if prog else
+                                          'AVCHD / MTS (1440×1080i anamorphic)')
                 result['par_needed'] = True
             else:
-                result['display_name'] = 'AVCHD / MTS (1920×1080i)'
+                result['display_name'] = ('HD Progressive (1920×1080p)' if prog
+                                          else 'AVCHD / MTS (1920×1080i)')
                 result['par_needed'] = False
         elif codec == 'mpeg2video' and height == 1080 and width == 1440:
             result['source_class'] = 'hdv'
-            result['display_name'] = 'HDV (1080i)'
+            result['display_name'] = 'HDV (1080p)' if prog else 'HDV (1080i)'
             if result['field_order'] == 'unknown':
                 result['field_order'] = 'tff'
             result['par_needed'] = True
         else:
             result['source_class'] = 'sd'
-            result['display_name'] = 'SD Interlaced'
+            result['display_name'] = 'SD Progressive' if prog else 'SD Interlaced'
 
     except Exception:
         pass
@@ -5672,6 +5685,16 @@ class RestorationWizard(BaseWindow):
             sc = classify_source(files[0])
             self.config_data['source_classification'] = sc
 
+            # A container that flags itself progressive settles Field Order on
+            # the spot, so the page opens on Progressive instead of defaulting
+            # to TFF and flipping once a background scan catches up.  Skipped
+            # if the user has already chosen by hand (the block above clears
+            # that flag whenever the file set actually changes).
+            if (sc.get('field_order') == 'progressive'
+                    and not self.config_data.get('field_order_user_set')):
+                self.config_data['field_order'] = 'progressive'
+                self.config_data['detected_field_order'] = 'progressive'
+
         else:
             self.config_data.pop('input_path', None)
             self.config_data.pop('guessed_format', None)
@@ -6527,11 +6550,13 @@ class RestorationWizard(BaseWindow):
         tk.Label(self.page_container, text="Source Details (HD)",
                  font=('Segoe UI', 22, 'bold'),
                  fg=Colors.TEXT_PRIMARY, bg=Colors.BG_MAIN).pack(anchor='w')
-        tk.Label(self.page_container, text="Configure your interlaced HD video source.",
+        sc = self.config_data.get('source_classification', {})
+        tk.Label(self.page_container,
+                 text=("Configure your progressive HD video source."
+                       if sc.get('progressive') else
+                       "Configure your interlaced HD video source."),
                  font=('Segoe UI', 13),
                  fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN).pack(anchor='w', pady=(2, 20))
-
-        sc = self.config_data.get('source_classification', {})
 
         def section_hdr_row(number, title, badge_text=None):
             """Return the header frame; badge_text shown in green if provided."""
@@ -6588,9 +6613,12 @@ class RestorationWizard(BaseWindow):
         # 2 — VIDEO STANDARD
         # ════════════════════════════════════════════════════════════════════
         fps_val = sc.get('fps', 0.0)
-        if abs(fps_val - 29.97) < 0.5 or abs(fps_val - 30.0) < 0.1:
+        # Progressive HD is commonly shot at the doubled rate (59.94/60, 50), so
+        # match those as well as the interlaced-frame rates.
+        if (abs(fps_val - 29.97) < 0.5 or abs(fps_val - 30.0) < 0.1
+                or abs(fps_val - 59.94) < 0.5 or abs(fps_val - 60.0) < 0.1):
             auto_format = 'ntsc'
-        elif abs(fps_val - 25.0) < 0.5:
+        elif abs(fps_val - 25.0) < 0.5 or abs(fps_val - 50.0) < 0.5:
             auto_format = 'pal'
         else:
             auto_format = self.config_data.get('auto_format')
@@ -6659,10 +6687,15 @@ class RestorationWizard(BaseWindow):
 
         self.field_var.trace_add('write', self._on_field_order_var_change)
 
-        # Note about HD field order universally being TFF
+        # Note about HD field order: TFF for interlaced camcorder sources, but
+        # a progressive container needs no field order at all.
         tk.Label(self.page_container,
-                 text="AVCHD and HDV sources are universally Top Field First (TFF). "
-                      "Only change this if you have confirmed otherwise.",
+                 text=("This source is flagged Progressive in its container, so there "
+                       "are no fields to order and no deinterlacing is needed. Only "
+                       "change this if you have confirmed the flag is wrong."
+                       if sc.get('progressive') else
+                       "Interlaced AVCHD and HDV sources are universally Top Field "
+                       "First (TFF). Only change this if you have confirmed otherwise."),
                  font=('Segoe UI', 10), fg=Colors.TEXT_SECONDARY, bg=Colors.BG_MAIN,
                  wraplength=620, justify='left').pack(anchor='w', pady=(6, 0))
 
@@ -9153,7 +9186,7 @@ class RestorationWizard(BaseWindow):
                      font=('Segoe UI', 13, 'bold'),
                      fg=Colors.TEXT_PRIMARY, bg=Colors.BG_CARD).pack(anchor='w', padx=16, pady=(12, 4))
             tk.Label(card,
-                     text="Your source is already 1080i HD. This software is programmed to upscale to a maximum of 1920×1080.",
+                     text="Your source is already 1080 HD. This software is programmed to upscale to a maximum of 1920×1080.",
                      font=('Segoe UI', 12),
                      fg=Colors.TEXT_SECONDARY, bg=Colors.BG_CARD,
                      wraplength=560, justify='left').pack(anchor='w', padx=16, pady=(0, 12))

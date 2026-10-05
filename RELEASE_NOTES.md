@@ -2,7 +2,7 @@
 
 ---
 
-## Version 1.8.0 — 2026-10-04
+## Version 1.8.0 — 2026-10-05
 
 This release is all about getting the **film-versus-video decision right**, and
 putting you in charge of it when the software gets it wrong.
@@ -75,6 +75,16 @@ inverse telecine are skipped, and **every other step still applies** — denoise
 dehalo, Y/C delay, upscale, colour correction, levels, grain, dithering — so an
 already-progressive capture can go through the rest of the restoration without
 being deinterlaced first.
+
+A progressive source is also **described correctly throughout the page**.
+Previously any 1080-line H.264 file was announced as `AVCHD / MTS (1920×1080i)`
+with the field order defaulted to TFF, because only an explicit top/bottom flag
+was recognised and everything else fell through to "interlaced". A phone or DSLR
+1080p clip is now reported as **HD Progressive (1920×1080p)** in the Detected
+Source panel, with the page heading, the field-order note and the Upscale page
+all matching. Progressive SD and progressive HDV are labelled correctly too, and
+50/60 fps sources now pick the right video standard (NTSC/PAL) automatically
+instead of falling back to a guess.
 
 ---
 

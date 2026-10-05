@@ -89,6 +89,12 @@ SC_SD = {'source_class': 'sd', 'display_name': 'SD Interlaced', 'codec': 'dvvide
          'needs_pixfmt_conversion': False}
 SC_HD = dict(SC_SD, source_class='hdv', width=1440, height=1080,
              display_name='HDV (1080i)')
+# A progressive 1080p60 phone clip, as classify_source() reports it.
+SC_HD_PROG = {'source_class': 'avchd', 'display_name': 'HD Progressive (1920×1080p)',
+              'codec': 'h264', 'width': 1920, 'height': 1080, 'fps': 60.0,
+              'field_order': 'progressive', 'progressive': True,
+              'par_needed': False, 'pix_fmt': 'yuv420p',
+              'needs_pixfmt_conversion': False}
 
 FILM = {'detected': True, 'pattern': '3:2', 'confidence': 'high',
         'target_fps': 24000 / 1001, 'dv_bypass': False,
@@ -218,6 +224,30 @@ check('switching back to TFF restores Frame Rate Mode',
       all(rb._enabled for rb in frame_rate_radios()))
 check('switching back to TFF restores the film/video choice',
       all(rb._enabled for rb in wiz._ivtc_radios))
+
+# ── A progressive HD source must not be described as interlaced anywhere ───
+print('\n-- progressive HD source (1080p60) --')
+render(SC_HD_PROG, ['clip.MOV'], None, field_order='progressive')
+page = texts(wiz.page_container)
+check('section 1 reports the source as 1080p',
+      any('HD Progressive (1920×1080p)' in t for t in page),
+      [t for t in page if '1080' in t][:4])
+check('nothing on the page claims the source is 1080i',
+      not any('1080i' in t for t in page),
+      [t for t in page if '1080i' in t])
+check('the page subtitle says progressive',
+      any('progressive HD video source' in t for t in page))
+check('the field-order note does not assert TFF',
+      not any('universally Top Field First' in t for t in page))
+check('Progressive is the selected field order',
+      wiz.field_var.get() == 'progressive', wiz.field_var.get())
+check('60 fps is recognised as the NTSC family',
+      wiz.config_data['format'] == 'ntsc', wiz.config_data.get('format'))
+check('frame-rate options are ghosted',
+      not any(rb._enabled for rb in frame_rate_radios()))
+check('the pipeline skips deinterlacing for it',
+      'QTGMC(' not in vcg.generate_vpy_script(dict(
+          wiz.config_data, input_path='clip.MOV', output_path='out.mov')))
 
 # ── Batch mode keeps the override ──────────────────────────────────────────
 print('\n-- batch mode --')
