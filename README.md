@@ -1,5 +1,5 @@
 # VCG Deinterlacer
-### Version 1.7.9 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
+### Version 1.8.0 — by [VideoCaptureGuide](https://www.VideoCaptureGuide.com)
 
 A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures using **QTGMC** — the industry-standard motion-compensated deinterlacer. Guided step-by-step wizard interface with automatic video analysis.
 
@@ -10,16 +10,16 @@ A free Windows tool for deinterlacing VHS, Hi8, Video8, and MiniDV tape captures
 There are four ways to get VCG Deinterlacer. **Not sure which is for you? Jump to [Which download should I pick?](#which-download-should-i-pick)** — for most people it's option 1.
 
 **1. Single EXE — the simple choice**
-**[Download VCG_Deinterlacer.exe — 1.7.9](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)** — one Windows file. Save it anywhere and double-click; there is nothing to unzip or install. On first launch the app automatically downloads FFmpeg and VapourSynth (~136 MB, one time only).
+**[Download VCG_Deinterlacer.exe — 1.8.0](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)** — one Windows file. Save it anywhere and double-click; there is nothing to unzip or install. On first launch the app automatically downloads FFmpeg and VapourSynth (~136 MB, one time only).
 
 **2. Standalone ZIP — if your antivirus blocks the single EXE**
-On the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), download **`VCG_Deinterlacer_1.7.9_standalone.zip`**. This is the *same program*, just delivered as a folder of files instead of one self-contained EXE. Some antivirus tools flag the single EXE as a false positive because of the way it unpacks itself in memory when it starts; the standalone version doesn't do that, so scanners usually leave it alone. Extract the ZIP, open the folder it creates, and double-click **`VCG_Deinterlacer.exe`** inside. **Keep the whole folder together** — the EXE needs the files next to it to run. First launch still auto-downloads FFmpeg and VapourSynth.
+On the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), download **`VCG_Deinterlacer_1.8.0_standalone.zip`**. This is the *same program*, just delivered as a folder of files instead of one self-contained EXE. Some antivirus tools flag the single EXE as a false positive because of the way it unpacks itself in memory when it starts; the standalone version doesn't do that, so scanners usually leave it alone. Extract the ZIP, open the folder it creates, and double-click **`VCG_Deinterlacer.exe`** inside. **Keep the whole folder together** — the EXE needs the files next to it to run. First launch still auto-downloads FFmpeg and VapourSynth.
 
 **3. Build it yourself from source**
 Prefer to compile your own binary? Grab the source — the **Source code (zip)** link on the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest), or `git clone` this repo — and run `build_vcg_deinterlacer.bat`. You get the same `VCG_Deinterlacer.exe` as option 1. See [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) for the full steps.
 
 **4. Run the Python script directly**
-If you already have **Python 3.12** and the required packages installed, you can run the app straight from the source file: `python vcg_deinterlacer_v129.py`. The dependency list is in [`requirements.txt`](requirements.txt) (`pip install -r requirements.txt`). FFmpeg and VapourSynth are still fetched automatically on first launch if they aren't already present.
+If you already have **Python 3.12** and the required packages installed, you can run the app straight from the source file: `python vcg_deinterlacer_v130.py`. The dependency list is in [`requirements.txt`](requirements.txt) (`pip install -r requirements.txt`). FFmpeg and VapourSynth are still fetched automatically on first launch if they aren't already present.
 
 ### Which download should I pick?
 
@@ -103,7 +103,7 @@ FFmpeg and VapourSynth are downloaded automatically into a `_deps\` folder next 
 
 ## Installation (ready-to-run EXE)
 
-1. Download `VCG_Deinterlacer_1.7.9.exe` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
+1. Download `VCG_Deinterlacer_1.8.0.exe` from the [Releases page](https://github.com/Video-Capture-Guide/VCG-Deinterlacer/releases/latest)
 2. Save it to any folder (e.g. `C:\Tools\VCG_Deinterlacer\`)
 3. Double-click `VCG_Deinterlacer.exe`
 4. On first launch, the **First Run Setup** window appears and downloads the required tools (~136 MB). This only happens once.
@@ -197,7 +197,7 @@ If motion looks jerky or stuttery after processing, try switching the field orde
 
 ## Technical Details
 
-### Processing Pipeline (v1.7.9)
+### Processing Pipeline (v1.8.0)
 
 Every encode runs through a **16-bit VapourSynth pipeline**. The source is lifted to 16-bit integer at the very start (`fmtc.bitdepth`) and all operations — QTGMC, BM3D, FineDehalo, colour cast correction, levels — run natively at that depth with no mid-chain round-trips to 8-bit. 10-bit or non-standard sources are converted to 8-bit YUV at load time before anything else runs.
 
@@ -256,6 +256,7 @@ This software is free and open source. Third-party components (FFmpeg, VapourSyn
 
 | Version | Date | Notes |
 |---------|------|-------|
+| 1.8.0 | 2026-10-04 | Film sources are now identified from their picture content: the telecine scan samples several segments spread across the whole file instead of only the opening seconds (so a studio logo or CGI bumper at the head of a film transfer no longer makes it read as video), reads the repeated-field cadence that is the mechanical signature of 3:2 pulldown in addition to the progressive-frame share, and no longer assumes a DV-codec file must be camcorder video — analog-to-DV captures of film are detected correctly; when a film source is found, Frame Rate Mode is ghosted out and the output is the native 23.976 fps (NTSC) / 25 fps (PAL); a new **Override detection** button (plus **Re-scan**) lets you force film or video by hand on any source, including batches; and an already-progressive source is now detected and selects the Progressive field order, which skips deinterlacing while every other restoration step still applies |
 | 1.7.9 | 2026-09-11 | New Live Preview window renders the real processed result on any frame before you commit to a full render — with a Before/After toggle (Space), frame scrubbing, and 1×/2×/4× zoom, showing only the steps visited so far; new Frame Rate Mode choice on the Source Details page (double-rate "bob" 59.94/50 fps vs single-rate 29.97/25 fps); output is now stamped with the frame rate the pipeline actually produced, fixing wrong playback speed and audio drift on single-rate and film (IVTC) renders; new Help → Check for Updates; mouse-wheel scrolling now works across the whole page and pages open at the top; output files are version-tagged (e.g. `…_VCGD179`) |
 | 1.7.8 | 2026-09-09 | A failed audio-mux pass can no longer destroy a finished render: on mux failure the truncated file is removed and the intact video-only render is restored (with the audio WAV kept for manual muxing); a pre-flight free-disk-space check skips the mux early if the drive can't hold the second copy; and an ffprobe integrity check verifies the output before declaring success, so a truncated file is now correctly reported as FAILED instead of SUCCESS |
 | 1.7.7 | 2026-09-07 | App version now shown prominently on the welcome/splash screen, in accent colour beneath the title, so you can confirm your build at a glance |

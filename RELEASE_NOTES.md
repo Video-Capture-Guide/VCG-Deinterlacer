@@ -2,6 +2,82 @@
 
 ---
 
+## Version 1.8.0 — 2026-10-04
+
+This release is all about getting the **film-versus-video decision right**, and
+putting you in charge of it when the software gets it wrong.
+
+### Fix: Film Sources Are Now Judged on Their Content, Not Their Codec
+
+Previously, any file using the DV codec was assumed to be home video from a
+MiniDV camcorder and was never checked for telecine. That assumption is wrong
+for a large class of captures: an analog-to-DV converter or a camcorder's
+passthrough writes film-sourced 3:2 pulldown into a DV file just as happily as
+it writes camcorder video, so film transfers digitised this way were always
+pushed through deinterlacing.
+
+The codec is no longer part of the decision. **Every source is now analysed on
+its actual picture content**, DV included.
+
+### Fix: A Studio Logo No Longer Makes a Film Transfer Look Like Video
+
+The telecine scan used to read only the opening seconds of a file. Almost every
+commercial transfer opens with a distributor logo or a CGI network bumper
+rendered at the video frame rate rather than carrying the film's 3:2 pulldown —
+so the scan saw video, missed the film that followed, and recommended
+deinterlacing for the whole programme.
+
+The scan now **samples several short segments spread across the whole running
+time** and skips the head of the file, then takes the verdict of the majority of
+those segments. One logo at the front, or one unusual scene in the middle, can
+no longer swing the result. It still does not have to read the entire file, so
+it stays quick — the badge now reports which segment it is working on.
+
+### Fix: 3:2 Pulldown Is Detected by Its Actual Signature
+
+Detection used to rely entirely on how many frames FFmpeg's analysis called
+"progressive". That works on calm footage but fails on busy material, where
+every frame can read as interlaced even though the film cadence is plainly
+there.
+
+The scan now also reads the **repeated-field cadence**, which is the mechanical
+signature of 3:2 pulldown: four film frames become five video frames, two of
+which repeat a field. On a film transfer that ratio sits near 40%; on genuine
+interlaced video it is zero. Either signal is now enough to identify a film
+source, which catches transfers the old test missed outright.
+
+### Fix: Frame Rate Mode Is Ghosted Out on a Film Source
+
+When a film source is detected and Inverse Telecine is applied, there is no
+field-to-frame choice to make — the output frame rate is the film's own
+(**23.976 fps** for NTSC, **25 fps** for PAL). The Frame Rate Mode options are
+now **greyed out**, with the reason spelled out in place of the recommendation,
+instead of presenting two deinterlacing choices that do not apply. The same
+happens on a progressive source, where nothing is deinterlaced at all.
+
+### New: Override Detection
+
+A new **⚙ Override detection** button on the Source Details page lets you set
+the film/video decision by hand on any source — force Inverse Telecine on a
+transfer the scan read as video, or force standard deinterlacing on one it
+flagged as film. Your choice sticks as you move through the wizard, and it is
+available for multi-file batches too, where automatic detection cannot run.
+
+A **🔄 Re-scan** button sits next to it. Revisiting the Source Details page no
+longer silently re-runs the scan and discards your choice.
+
+### New: Progressive Sources Are Detected and Handled
+
+**Progressive** now sits below TFF and BFF in Field Order on every source page,
+and the software will **select it for you** when a file reads as progressive
+throughout (from its container flag or from the content scan). Deinterlacing and
+inverse telecine are skipped, and **every other step still applies** — denoise,
+dehalo, Y/C delay, upscale, colour correction, levels, grain, dithering — so an
+already-progressive capture can go through the rest of the restoration without
+being deinterlaced first.
+
+---
+
 ## Version 1.7.9 — 2026-09-11
 
 ### New: Live Preview — See Your Settings Before You Render

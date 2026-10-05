@@ -8,10 +8,28 @@ fmtconv/lsmas are LoadPlugin()ed from the real plugins64 by the script).
 """
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+def _newest_source(root):
+    """Highest-numbered vcg_deinterlacer_vNNN.py in `root`.
+
+    The version lives in the filename, so pin to the newest rather than a
+    hard-coded one that goes stale at every release.
+    """
+    best = None
+    for name in os.listdir(root):
+        m = re.fullmatch(r'vcg_deinterlacer_v(\d+)\.py', name)
+        if m and (best is None or int(m.group(1)) > best[0]):
+            best = (int(m.group(1)), name)
+    if best is None:
+        raise SystemExit('no vcg_deinterlacer_vNNN.py found in ' + root)
+    return os.path.join(root, best[1])
+
+
 DEPS = os.path.abspath(os.path.join(ROOT, '..', '_deps'))
 FFMPEG = os.path.join(DEPS, 'ffmpeg', 'ffmpeg.exe')
 FFPROBE = os.path.join(DEPS, 'ffmpeg', 'ffprobe.exe')
@@ -30,7 +48,7 @@ def check(name, cond, detail=''):
 
 # ── Import the app module (safe: __main__ guard) and point it at real deps ──
 spec = importlib.util.spec_from_file_location(
-    'vcg', os.path.join(ROOT, 'vcg_deinterlacer_v127.py'))
+    'vcg', _newest_source(ROOT))
 vcg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vcg)
 vcg.FFPROBE_PATH = FFPROBE

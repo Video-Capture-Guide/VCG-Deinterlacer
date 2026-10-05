@@ -73,5 +73,9 @@ vcg_deinterlacer_v121.backup-pre-v15.py
 # Local download of CI artifacts for testing
 _ci_artifact_test/
 
+# Loose release EXEs downloaded for local testing (the real ones ship via
+# GitHub Releases; local builds land in dist/)
+VCG_Deinterlacer_*.exe
+
 # Personal local reference (kept on Darryl's machine, not for the repo)
 HOW_TO_UPDATE.md

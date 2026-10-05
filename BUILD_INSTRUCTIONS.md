@@ -444,6 +444,75 @@ handles this using the `video_format` config key.
 
 ---
 
+## Development Notes — 1.8.0 Session (2026-10-04): Film Detection & Override
+
+Implementation notes for 1.8.0 (content-based telecine detection, Frame Rate Mode
+ghosting, manual override, progressive sources). Read before touching
+`detect_telecine()`, the Source Details page, or `_refresh_deint_dependent_state()`.
+
+### 1. The capture codec must never decide film vs video
+
+1.7.9 returned early from `detect_telecine()` whenever `capture_method == 'dv'`
+(`dv_bypass`), on the theory that DV means a MiniDV camcorder and camcorders shoot
+interlaced video. That is false for a whole class of captures: an analog-to-DV
+converter (Canopus ADVC, Sony media converters, camcorder passthrough) writes
+film-sourced 3:2 pulldown into a `dvvideo` file. The bypass is gone, along with the
+four `capture_method != 'dv'` guards that mirrored it in
+`generate_vpy_script()`, `_output_frame_rate()`, `_preview_filter_summary()` and the
+Finalize summary. `dv_bypass` is still a key in the result dict (always `False`) so
+a stored `ivtc_result` from an older config cannot raise a `KeyError`.
+
+### 2. Detection samples the whole file, not the first 500 frames
+
+`_telecine_sample_plan(duration, fps)` returns `(start_seconds, frames)` windows:
+one 500-frame pass for files under 30 s or of unknown duration, otherwise 3/5/7
+windows of 240 frames spread across the running time, with the head of the file
+skipped (8% of duration, at least 5 s, capped at 60 s). The head skip is the point:
+commercial transfers open with a distributor logo or CGI bumper rendered at the
+video rate, and reading only that is what made film sources report as video.
+
+The verdict is a **majority of windows**, not the aggregate ratio — one logo at the
+front or one odd scene in the middle cannot swing it. A strong aggregate signal is a
+second route in. `time_budget` (default 120 s) caps total wall-clock and uses
+whatever has been sampled so far.
+
+### 3. Repeated fields are the reliable 3:2 signal; progressive share is the weak one
+
+idet prints two summaries. 1.7.9 used only "Multi frame detection" (the progressive
+frame share). Verified against a synthetic 3:2-telecined clip: idet reported
+**TFF 301, Progressive 0** — the progressive heuristic read busy film as pure
+interlaced video — while "Repeated Fields" reported **Top 60, Bottom 60 of 301 =
+0.40**, exactly the textbook ratio (four film frames → five video frames, two
+repeating a field). A real DV camcorder capture and a synthetic true-interlaced clip
+both reported 0.00.
+
+So `_idet_counts()` now returns a dict including `rep`/`rep_total`, and a window
+votes film if *either* the progressive share clears its threshold *or* (NTSC only)
+the repeated-field ratio clears 0.18. PAL 2:2 repeats no fields at all, so the
+repeated-field route is deliberately NTSC-only and PAL keeps its high (0.75)
+progressive threshold to avoid false positives on low-motion 50i video.
+
+### 4. Frame Rate Mode ghosting is one function, called from three places
+
+`_refresh_deint_dependent_state()` is the single place that decides whether the
+double/single-rate chooser applies. It is called from the end of
+`_build_frame_rate_section()`, from `_show_ivtc_result()`/the IVTC radio trace, and
+from `_on_field_order_var_change()`. Every widget lookup goes through `getattr` +
+`winfo_exists()` because detection results arrive asynchronously and may land after
+the page has been rebuilt. `ModernRadioButton.set_enabled()` is the new ghosting
+primitive (ignores clicks and hover, draws in `TEXT_DISABLED`).
+
+### 5. Revisiting Source Details no longer re-runs the scan
+
+The page now runs `_run_ivtc_detection()` only when there is no stored
+`ivtc_result`; otherwise it re-renders the stored one. This matters twice over: the
+multi-window scan is slower than the old single pass, and a re-run used to silently
+discard a manual override. `ivtc_user_override` records a deliberate choice, is
+cleared by an explicit **Re-scan** and by changing the source file, and keeps the
+choice card expanded on return.
+
+---
+
 ## Development Notes — 1.7.9 Session (2026-09-11): Live Preview & Frame Rate Mode
 
 Implementation notes for 1.7.9 (Live Preview window, Frame Rate Mode chooser,
