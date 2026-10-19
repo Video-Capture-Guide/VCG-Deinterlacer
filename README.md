@@ -1,4 +1,4 @@
-We have produced a new version of the software in Rust with more features and a better interface. Try the 2.0 version here: [https://github.com/Video-Capture-Guide/VCG-Deinterlacer-2.0](url)
+# We have produced a new version of the software in Rust with more features and a better interface. Try the 2.0 version here: [https://github.com/Video-Capture-Guide/VCG-Deinterlacer-2.0](url)
 
 
 # VCG Deinterlacer
